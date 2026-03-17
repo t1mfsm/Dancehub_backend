@@ -1,0 +1,3389 @@
+openapi: 3.0.3
+info:
+  title: DanceHub API
+  version: 1.0.0
+  description: API для каталога курсов, справочников и интеграции с фронтом.
+paths:
+  /api/auth/change-password/:
+    post:
+      operationId: api_auth_change_password_create
+      description: Меняет пароль текущего пользователя.
+      summary: Сменить пароль
+      tags:
+      - Auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/auth/login/:
+    post:
+      operationId: api_auth_login_create
+      description: Авторизует пользователя и возвращает JWT токены.
+      summary: Логин
+      tags:
+      - Auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Login'
+          description: ''
+  /api/auth/logout/:
+    post:
+      operationId: api_auth_logout_create
+      description: Добавляет refresh token в blacklist и завершает сессию пользователя.
+      summary: Выход из системы
+      tags:
+      - Auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LogoutRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LogoutRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LogoutRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Logout'
+          description: ''
+  /api/auth/refresh/:
+    post:
+      operationId: api_auth_refresh_create
+      description: Принимает refresh token и возвращает новый access token.
+      summary: Обновить access token
+      tags:
+      - Auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenRefresh'
+          description: ''
+  /api/auth/register/:
+    post:
+      operationId: api_auth_register_create
+      description: Создает нового пользователя и сразу возвращает JWT токены.
+      summary: Регистрация
+      tags:
+      - Auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Register'
+          description: ''
+  /api/calendar/:
+    get:
+      operationId: api_calendar_list
+      description: Возвращает занятия для календаря текущего пользователя.
+      summary: Календарь занятий пользователя
+      parameters:
+      - in: query
+        name: course_id
+        schema:
+          type: integer
+        description: Фильтр по курсу
+      - in: query
+        name: date_from
+        schema:
+          type: string
+        description: Дата от YYYY-MM-DD
+      - in: query
+        name: date_to
+        schema:
+          type: string
+        description: Дата до YYYY-MM-DD
+      - in: query
+        name: mode
+        schema:
+          type: string
+        description: all | enrolled | teaching
+      tags:
+      - Calendar
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CalendarEvent'
+          description: ''
+  /api/cities/:
+    get:
+      operationId: api_cities_list
+      description: Возвращает справочник городов для фильтров и форм.
+      summary: Список городов
+      tags:
+      - Reference
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/City'
+          description: ''
+  /api/courses/:
+    get:
+      operationId: api_courses_list
+      description: Возвращает список курсов с простой фильтрацией по query params.
+      summary: Список курсов
+      parameters:
+      - in: query
+        name: city
+        schema:
+          type: string
+        description: Название города
+      - in: query
+        name: level
+        schema:
+          type: string
+        description: 'Уровень: beginner/intermediate/advanced/any'
+      - in: query
+        name: status
+        schema:
+          type: string
+        description: Статус курса
+      - in: query
+        name: studio
+        schema:
+          type: string
+        description: Название студии
+      - in: query
+        name: style
+        schema:
+          type: string
+        description: Slug или название стиля
+      - in: query
+        name: teacher
+        schema:
+          type: string
+        description: Имя, фамилия или email преподавателя
+      tags:
+      - Courses
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CourseList'
+          description: ''
+    post:
+      operationId: api_courses_create
+      description: Создает новый курс. Доступно преподавателю или администратору.
+      summary: Создать курс
+      tags:
+      - Courses
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseWriteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CourseWriteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CourseWriteRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseDetail'
+          description: ''
+  /api/courses/{course_id}/enroll/:
+    post:
+      operationId: api_courses_enroll_create
+      description: Создает запись текущего пользователя на курс.
+      summary: Записаться на курс
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Enrollment'
+          description: ''
+    delete:
+      operationId: api_courses_enroll_destroy
+      description: Помечает запись текущего пользователя как отмененную.
+      summary: Отменить запись на курс
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Users
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/courses/{id}/:
+    get:
+      operationId: api_courses_retrieve
+      description: Возвращает полную карточку курса для детальной страницы.
+      summary: Детальная информация о курсе
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Courses
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseDetail'
+          description: ''
+    put:
+      operationId: api_courses_update
+      description: Полностью обновляет курс. Доступно преподавателю курса или администратору.
+      summary: Полностью обновить курс
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Courses
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseWriteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CourseWriteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CourseWriteRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseDetail'
+          description: ''
+    patch:
+      operationId: api_courses_partial_update
+      description: Обновляет курс. Доступно преподавателю курса или администратору.
+      summary: Обновить курс
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Courses
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedCourseWriteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedCourseWriteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedCourseWriteRequest'
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseDetail'
+          description: ''
+    delete:
+      operationId: api_courses_destroy
+      description: Удаляет курс. Доступно преподавателю курса или администратору.
+      summary: Удалить курс
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Courses
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/courses/{id}/attendance/:
+    get:
+      operationId: api_courses_attendance_list
+      description: Возвращает все отметки посещаемости по выбранному курсу.
+      summary: Посещаемость по курсу
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Attendance
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Attendance'
+          description: ''
+  /api/courses/{id}/lessons/:
+    get:
+      operationId: api_courses_lessons_list
+      description: Возвращает список занятий выбранного курса.
+      summary: Занятия курса
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      - in: query
+        name: status
+        schema:
+          type: string
+        description: Фильтр по статусу занятия
+      tags:
+      - Lessons
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Lesson'
+          description: ''
+    post:
+      operationId: api_courses_lessons_create
+      description: Создает новое занятие для курса. Доступно преподавателю курса или
+        администратору.
+      summary: Создать занятие курса
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Lessons
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LessonWriteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LessonWriteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LessonWriteRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lesson'
+          description: ''
+  /api/courses/{id}/students/:
+    get:
+      operationId: api_courses_students_list
+      description: Возвращает список учеников, записанных на выбранный курс.
+      summary: Студенты курса
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      - in: query
+        name: status
+        schema:
+          type: string
+        description: Статус записи
+      tags:
+      - Courses
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CourseStudent'
+          description: ''
+  /api/dance-styles/:
+    get:
+      operationId: api_dance_styles_list
+      description: Возвращает справочник танцевальных стилей.
+      summary: Список танцевальных стилей
+      tags:
+      - Reference
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DanceStyle'
+          description: ''
+  /api/dashboard/student/:
+    get:
+      operationId: api_dashboard_student_retrieve
+      description: Возвращает краткую сводку по активным курсам, избранному и ближайшим
+        занятиям ученика.
+      summary: Дашборд ученика
+      tags:
+      - Dashboard
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentDashboard'
+          description: ''
+  /api/dashboard/teacher/:
+    get:
+      operationId: api_dashboard_teacher_retrieve
+      description: Возвращает сводку по курсам, ученикам, ближайшим занятиям и посещаемости
+        преподавателя.
+      summary: Дашборд преподавателя
+      tags:
+      - Dashboard
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherDashboard'
+          description: ''
+  /api/enrollments/:
+    get:
+      operationId: api_enrollments_list
+      description: Возвращает записи текущего пользователя на курсы.
+      summary: Записи пользователя на курсы
+      tags:
+      - Users
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Enrollment'
+          description: ''
+  /api/favorite-courses/{course_id}/:
+    post:
+      operationId: api_favorite_courses_create
+      description: Добавляет курс в избранное текущего пользователя.
+      summary: Добавить курс в избранное
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Users
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FavoriteCourse'
+          description: ''
+    delete:
+      operationId: api_favorite_courses_destroy
+      description: Удаляет курс из избранного текущего пользователя.
+      summary: Удалить курс из избранного
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Users
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/favorite-teachers/{teacher_id}/:
+    post:
+      operationId: api_favorite_teachers_create
+      description: Добавляет преподавателя в избранное текущего пользователя.
+      summary: Добавить преподавателя в избранное
+      parameters:
+      - in: path
+        name: teacher_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Users
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FavoriteTeacher'
+          description: ''
+    delete:
+      operationId: api_favorite_teachers_destroy
+      description: Удаляет преподавателя из избранного текущего пользователя.
+      summary: Удалить преподавателя из избранного
+      parameters:
+      - in: path
+        name: teacher_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Users
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/favorites/:
+    get:
+      operationId: api_favorites_retrieve
+      description: Возвращает избранные курсы текущего пользователя.
+      summary: Избранные курсы пользователя
+      tags:
+      - Users
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FavoritesResponse'
+          description: ''
+  /api/lessons/{lesson_id}/:
+    get:
+      operationId: api_lessons_retrieve
+      parameters:
+      - in: path
+        name: lesson_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - api
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lesson'
+          description: ''
+    put:
+      operationId: api_lessons_update
+      description: Полностью обновляет занятие. Доступно преподавателю курса или администратору.
+      summary: Полностью обновить занятие
+      parameters:
+      - in: path
+        name: lesson_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Lessons
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LessonWriteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LessonWriteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LessonWriteRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lesson'
+          description: ''
+    patch:
+      operationId: api_lessons_partial_update
+      description: Обновляет занятие. Доступно преподавателю курса или администратору.
+      summary: Обновить занятие
+      parameters:
+      - in: path
+        name: lesson_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Lessons
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedLessonWriteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedLessonWriteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedLessonWriteRequest'
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lesson'
+          description: ''
+    delete:
+      operationId: api_lessons_destroy
+      description: Удаляет занятие. Доступно преподавателю курса или администратору.
+      summary: Удалить занятие
+      parameters:
+      - in: path
+        name: lesson_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Lessons
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/lessons/{lesson_id}/attendance/:
+    get:
+      operationId: api_lessons_attendance_list
+      description: Возвращает отметки посещаемости по конкретному занятию.
+      summary: Посещаемость по занятию
+      parameters:
+      - in: path
+        name: lesson_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Attendance
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Attendance'
+          description: ''
+  /api/lessons/{lesson_id}/attendance/mark/:
+    post:
+      operationId: api_lessons_attendance_mark_create
+      description: Создает или обновляет отметку посещаемости ученика по занятию.
+      summary: Отметить посещаемость
+      parameters:
+      - in: path
+        name: lesson_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Attendance
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttendanceMarkRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AttendanceMarkRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AttendanceMarkRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttendanceMark'
+          description: ''
+  /api/map/points/:
+    get:
+      operationId: api_map_points_list
+      description: Возвращает студии для карты с базовой фильтрацией.
+      summary: Точки для карты студий
+      parameters:
+      - in: query
+        name: city
+        schema:
+          type: string
+        description: Название города
+      - in: query
+        name: metro
+        schema:
+          type: string
+        description: Станция метро
+      - in: query
+        name: studio
+        schema:
+          type: string
+        description: Название студии
+      - in: query
+        name: style
+        schema:
+          type: string
+        description: Стиль курса в студии
+      tags:
+      - Map
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MapPoint'
+          description: ''
+  /api/me/:
+    get:
+      operationId: api_me_retrieve
+      description: Возвращает профиль текущего авторизованного пользователя.
+      summary: Текущий пользователь
+      tags:
+      - Users
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+          description: ''
+    put:
+      operationId: api_me_update
+      description: Полностью обновляет профиль текущего авторизованного пользователя.
+      summary: Полностью обновить текущего пользователя
+      tags:
+      - Users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MeUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/MeUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/MeUpdateRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+          description: ''
+    patch:
+      operationId: api_me_partial_update
+      description: Частично обновляет профиль текущего авторизованного пользователя.
+      summary: Обновить текущего пользователя
+      tags:
+      - Users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedMeUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedMeUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedMeUpdateRequest'
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+          description: ''
+  /api/me/preferences/:
+    get:
+      operationId: api_me_preferences_retrieve
+      description: Возвращает предпочтения текущего пользователя для опроса и рекомендаций.
+      summary: Предпочтения пользователя
+      tags:
+      - Users
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPreference'
+          description: ''
+    patch:
+      operationId: api_me_preferences_partial_update
+      description: Создает или обновляет предпочтения текущего пользователя.
+      summary: Обновить предпочтения пользователя
+      tags:
+      - Users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedUserPreferenceRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedUserPreferenceRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedUserPreferenceRequest'
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPreference'
+          description: ''
+  /api/me/skills/:
+    get:
+      operationId: api_me_skills_list
+      description: Возвращает навыки текущего пользователя.
+      summary: Навыки пользователя
+      tags:
+      - Users
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserSkill'
+          description: ''
+    put:
+      operationId: api_me_skills_update
+      description: Полностью заменяет список навыков текущего пользователя.
+      summary: Полностью заменить навыки пользователя
+      tags:
+      - Users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/UserSkillWriteItemRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/UserSkillWriteItemRequest'
+          multipart/form-data:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/UserSkillWriteItemRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserSkill'
+          description: ''
+    patch:
+      operationId: api_me_skills_partial_update
+      description: Добавляет или обновляет навыки текущего пользователя.
+      summary: Частично обновить навыки пользователя
+      tags:
+      - Users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/UserSkillWriteItemRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/UserSkillWriteItemRequest'
+          multipart/form-data:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/UserSkillWriteItemRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserSkill'
+          description: ''
+  /api/my-courses/:
+    get:
+      operationId: api_my_courses_list
+      description: Возвращает курсы текущего пользователя вместе со статусом записи.
+      summary: Мои курсы
+      parameters:
+      - in: query
+        name: status
+        schema:
+          type: string
+        description: 'Статус записи: active/pending/cancelled/completed'
+      tags:
+      - Users
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MyCourse'
+          description: ''
+  /api/my-teaching-courses/:
+    get:
+      operationId: api_my_teaching_courses_list
+      description: Возвращает курсы, которые ведет текущий преподаватель.
+      summary: Мои курсы как преподавателя
+      parameters:
+      - in: query
+        name: status
+        schema:
+          type: string
+        description: Статус курса
+      tags:
+      - Teachers
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TeachingCourse'
+          description: ''
+  /api/recommendations/courses/:
+    get:
+      operationId: api_recommendations_courses_list
+      description: Возвращает рекомендованные курсы на основе предпочтений и навыков
+        пользователя.
+      summary: Рекомендованные курсы
+      tags:
+      - Recommendations
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CourseRecommendation'
+          description: ''
+  /api/reviews/courses/{course_id}/:
+    get:
+      operationId: api_reviews_courses_list
+      description: Возвращает все отзывы выбранного курса.
+      summary: Список отзывов о курсе
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Reviews
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CourseReview'
+          description: ''
+    post:
+      operationId: api_reviews_courses_create
+      description: Создает или обновляет отзыв текущего пользователя о курсе.
+      summary: Оставить отзыв о курсе
+      parameters:
+      - in: path
+        name: course_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Reviews
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseReviewCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CourseReviewCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CourseReviewCreateRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseReviewCreate'
+          description: ''
+  /api/reviews/teachers/{teacher_id}/:
+    get:
+      operationId: api_reviews_teachers_list
+      description: Возвращает все отзывы выбранного преподавателя.
+      summary: Список отзывов о преподавателе
+      parameters:
+      - in: path
+        name: teacher_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Reviews
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TeacherReview'
+          description: ''
+    post:
+      operationId: api_reviews_teachers_create
+      description: Создает или обновляет отзыв текущего пользователя о преподавателе.
+      summary: Оставить отзыв о преподавателе
+      parameters:
+      - in: path
+        name: teacher_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Reviews
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeacherReviewCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TeacherReviewCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TeacherReviewCreateRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherReviewCreate'
+          description: ''
+  /api/studios/:
+    get:
+      operationId: api_studios_list
+      description: Возвращает список студий для карты и фильтров.
+      summary: Список студий
+      tags:
+      - Reference
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Studio'
+          description: ''
+  /api/studios/{id}/:
+    get:
+      operationId: api_studios_retrieve
+      description: Возвращает студию с залами и количеством курсов.
+      summary: Детальная информация о студии
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Reference
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudioDetail'
+          description: ''
+  /api/teachers/:
+    get:
+      operationId: api_teachers_list
+      description: Возвращает список преподавателей с базовой фильтрацией.
+      summary: Список преподавателей
+      parameters:
+      - in: query
+        name: city
+        schema:
+          type: string
+        description: Название города
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: Имя, фамилия или email
+      - in: query
+        name: style
+        schema:
+          type: string
+        description: Slug или название стиля
+      tags:
+      - Teachers
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TeacherList'
+          description: ''
+  /api/teachers/{id}/:
+    get:
+      operationId: api_teachers_retrieve
+      description: Возвращает карточку преподавателя с курсами, достижениями и отзывами.
+      summary: Детальная информация о преподавателе
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Teachers
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherDetail'
+          description: ''
+  /api/teachers/{id}/courses/:
+    get:
+      operationId: api_teachers_courses_list
+      description: Возвращает список курсов выбранного преподавателя.
+      summary: Курсы преподавателя
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      - in: query
+        name: status
+        schema:
+          type: string
+        description: Статус курса
+      tags:
+      - Teachers
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TeacherCourseList'
+          description: ''
+components:
+  schemas:
+    Attendance:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        lesson_id:
+          type: integer
+          readOnly: true
+        lesson_date:
+          type: string
+          format: date
+          readOnly: true
+        course_id:
+          type: integer
+          readOnly: true
+        course_name:
+          type: string
+          readOnly: true
+        student_id:
+          type: integer
+          readOnly: true
+        student_name:
+          type: string
+          readOnly: true
+        status:
+          $ref: '#/components/schemas/Status27cEnum'
+        marked_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - course_id
+      - course_name
+      - id
+      - lesson_date
+      - lesson_id
+      - marked_at
+      - status
+      - student_id
+      - student_name
+    AttendanceMark:
+      type: object
+      properties:
+        student_id:
+          type: integer
+        status:
+          $ref: '#/components/schemas/Status27cEnum'
+      required:
+      - status
+      - student_id
+    AttendanceMarkRequest:
+      type: object
+      properties:
+        student_id:
+          type: integer
+        status:
+          $ref: '#/components/schemas/Status27cEnum'
+      required:
+      - status
+      - student_id
+    BlankEnum:
+      enum:
+      - ''
+    CalendarEvent:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        course_id:
+          type: integer
+          readOnly: true
+        course_name:
+          type: string
+          readOnly: true
+        teacher_name:
+          type: string
+          readOnly: true
+        dance_style:
+          type: string
+          readOnly: true
+        lesson_date:
+          type: string
+          format: date
+        time_from:
+          type: string
+          format: time
+        time_to:
+          type: string
+          format: time
+        start:
+          type: string
+          readOnly: true
+        end:
+          type: string
+          readOnly: true
+        location_text:
+          type: string
+          maxLength: 255
+        status:
+          $ref: '#/components/schemas/Status627Enum'
+        studio:
+          type: string
+          readOnly: true
+        city:
+          type: string
+          readOnly: true
+      required:
+      - city
+      - course_id
+      - course_name
+      - dance_style
+      - end
+      - id
+      - lesson_date
+      - start
+      - studio
+      - teacher_name
+      - time_from
+      - time_to
+    ChangePasswordRequest:
+      type: object
+      properties:
+        current_password:
+          type: string
+          writeOnly: true
+          minLength: 1
+        new_password:
+          type: string
+          writeOnly: true
+          minLength: 8
+        new_password_confirm:
+          type: string
+          writeOnly: true
+          minLength: 8
+      required:
+      - current_password
+      - new_password
+      - new_password_confirm
+    City:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 128
+      required:
+      - id
+      - name
+    CourseDashboardItem:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 255
+        status:
+          $ref: '#/components/schemas/StatusE0cEnum'
+        students_count:
+          type: integer
+          readOnly: true
+        lessons_count:
+          type: integer
+          readOnly: true
+      required:
+      - id
+      - lessons_count
+      - name
+      - students_count
+    CourseDetail:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 255
+        description:
+          type: string
+        level:
+          $ref: '#/components/schemas/LevelEnum'
+        price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+        capacity:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        date_from:
+          type: string
+          format: date
+        date_to:
+          type: string
+          format: date
+        status:
+          $ref: '#/components/schemas/StatusE0cEnum'
+        image_cover:
+          type: string
+          format: uri
+          maxLength: 200
+        teacher_id:
+          type: integer
+          readOnly: true
+        teacher_name:
+          type: string
+          readOnly: true
+        dance_style:
+          type: string
+          readOnly: true
+        dance_style_slug:
+          type: string
+          readOnly: true
+        city:
+          type: string
+          readOnly: true
+        studio:
+          type: string
+          readOnly: true
+        hall:
+          type: string
+          readOnly: true
+        music:
+          type: object
+          additionalProperties: {}
+          nullable: true
+          readOnly: true
+        images:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          readOnly: true
+        schedule_rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/CourseScheduleRule'
+          readOnly: true
+        studio_data:
+          allOf:
+          - $ref: '#/components/schemas/Studio'
+          readOnly: true
+        reviews_count:
+          type: integer
+          readOnly: true
+      required:
+      - capacity
+      - city
+      - dance_style
+      - dance_style_slug
+      - date_from
+      - date_to
+      - hall
+      - id
+      - images
+      - level
+      - music
+      - name
+      - price
+      - reviews_count
+      - schedule_rules
+      - studio
+      - studio_data
+      - teacher_id
+      - teacher_name
+    CourseList:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 255
+        description:
+          type: string
+        level:
+          $ref: '#/components/schemas/LevelEnum'
+        price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+        capacity:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        date_from:
+          type: string
+          format: date
+        date_to:
+          type: string
+          format: date
+        status:
+          $ref: '#/components/schemas/StatusE0cEnum'
+        image_cover:
+          type: string
+          format: uri
+          maxLength: 200
+        teacher_id:
+          type: integer
+          readOnly: true
+        teacher_name:
+          type: string
+          readOnly: true
+        dance_style:
+          type: string
+          readOnly: true
+        dance_style_slug:
+          type: string
+          readOnly: true
+        city:
+          type: string
+          readOnly: true
+        studio:
+          type: string
+          readOnly: true
+        hall:
+          type: string
+          readOnly: true
+      required:
+      - capacity
+      - city
+      - dance_style
+      - dance_style_slug
+      - date_from
+      - date_to
+      - hall
+      - id
+      - level
+      - name
+      - price
+      - studio
+      - teacher_id
+      - teacher_name
+    CourseRecommendation:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 255
+        level:
+          $ref: '#/components/schemas/LevelEnum'
+        price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+        date_from:
+          type: string
+          format: date
+        date_to:
+          type: string
+          format: date
+        status:
+          $ref: '#/components/schemas/StatusE0cEnum'
+        teacher_name:
+          type: string
+          readOnly: true
+        dance_style:
+          type: string
+          readOnly: true
+        dance_style_slug:
+          type: string
+          readOnly: true
+        studio:
+          type: string
+          readOnly: true
+        city:
+          type: string
+          readOnly: true
+        recommendation_reason:
+          type: string
+          readOnly: true
+        recommendation_score:
+          type: integer
+          readOnly: true
+        recommendation_reasons:
+          type: array
+          items:
+            type: string
+          readOnly: true
+      required:
+      - city
+      - dance_style
+      - dance_style_slug
+      - date_from
+      - date_to
+      - id
+      - level
+      - name
+      - price
+      - recommendation_reason
+      - recommendation_reasons
+      - recommendation_score
+      - studio
+      - teacher_name
+    CourseReview:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        author_name:
+          type: string
+          readOnly: true
+        rating:
+          type: integer
+          maximum: 32767
+          minimum: 0
+        text:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - author_name
+      - created_at
+      - id
+      - rating
+    CourseReviewCreate:
+      type: object
+      properties:
+        rating:
+          type: integer
+          maximum: 5
+          minimum: 1
+        text:
+          type: string
+      required:
+      - rating
+    CourseReviewCreateRequest:
+      type: object
+      properties:
+        rating:
+          type: integer
+          maximum: 5
+          minimum: 1
+        text:
+          type: string
+      required:
+      - rating
+    CourseScheduleRule:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        weekday:
+          $ref: '#/components/schemas/WeekdayEnum'
+        time_from:
+          type: string
+          format: time
+        time_to:
+          type: string
+          format: time
+        hall:
+          type: string
+          readOnly: true
+        location_text:
+          type: string
+          maxLength: 255
+      required:
+      - hall
+      - id
+      - time_from
+      - time_to
+      - weekday
+    CourseStudent:
+      type: object
+      properties:
+        enrollment_id:
+          type: integer
+        user_id:
+          type: integer
+        full_name:
+          type: string
+          readOnly: true
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        dance_level:
+          type: string
+        enrolled_at:
+          type: string
+          format: date
+        status:
+          type: string
+        paid:
+          type: boolean
+      required:
+      - dance_level
+      - email
+      - enrolled_at
+      - enrollment_id
+      - full_name
+      - paid
+      - phone
+      - status
+      - user_id
+    CourseWriteRequest:
+      type: object
+      properties:
+        teacher_id:
+          type: integer
+          writeOnly: true
+        dance_style_id:
+          type: integer
+        studio_id:
+          type: integer
+          nullable: true
+        hall_id:
+          type: integer
+          nullable: true
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+        level:
+          $ref: '#/components/schemas/LevelEnum'
+        price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+        capacity:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        date_from:
+          type: string
+          format: date
+        date_to:
+          type: string
+          format: date
+        status:
+          $ref: '#/components/schemas/StatusE0cEnum'
+        image_cover:
+          type: string
+          format: uri
+          maxLength: 200
+      required:
+      - capacity
+      - dance_style_id
+      - date_from
+      - date_to
+      - level
+      - name
+      - price
+    DanceLevelEnum:
+      enum:
+      - beginner
+      - intermediate
+      - advanced
+      - any
+      type: string
+      description: |-
+        * `beginner` - Начинающий
+        * `intermediate` - Средний
+        * `advanced` - Продвинутый
+        * `any` - Любой
+    DanceStyle:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 128
+        slug:
+          type: string
+          maxLength: 140
+          pattern: ^[-a-zA-Z0-9_]+$
+      required:
+      - id
+      - name
+      - slug
+    Enrollment:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        course:
+          type: object
+          additionalProperties: {}
+          readOnly: true
+        enrolled_at:
+          type: string
+          format: date
+        status:
+          $ref: '#/components/schemas/Status772Enum'
+        paid:
+          type: boolean
+        cancelled_at:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+      - course
+      - enrolled_at
+      - id
+    EnrollmentRequest:
+      type: object
+      properties:
+        enrolled_at:
+          type: string
+          format: date
+        status:
+          $ref: '#/components/schemas/Status772Enum'
+        paid:
+          type: boolean
+        cancelled_at:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+      - enrolled_at
+    FavoriteCourse:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        course:
+          type: object
+          additionalProperties: {}
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - course
+      - created_at
+      - id
+    FavoriteTeacher:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        teacher:
+          type: object
+          additionalProperties: {}
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - id
+      - teacher
+    FavoritesResponse:
+      type: object
+      properties:
+        courses:
+          type: array
+          items:
+            $ref: '#/components/schemas/FavoriteCourse'
+      required:
+      - courses
+    Lesson:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        course_id:
+          type: integer
+          readOnly: true
+        course_name:
+          type: string
+          readOnly: true
+        teacher_name:
+          type: string
+          readOnly: true
+        lesson_date:
+          type: string
+          format: date
+        time_from:
+          type: string
+          format: time
+        time_to:
+          type: string
+          format: time
+        location_text:
+          type: string
+          maxLength: 255
+        status:
+          $ref: '#/components/schemas/Status627Enum'
+        hall:
+          type: string
+          readOnly: true
+        studio:
+          type: string
+          readOnly: true
+        city:
+          type: string
+          readOnly: true
+      required:
+      - city
+      - course_id
+      - course_name
+      - hall
+      - id
+      - lesson_date
+      - studio
+      - teacher_name
+      - time_from
+      - time_to
+    LessonDashboardItem:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        course_name:
+          type: string
+          readOnly: true
+        lesson_date:
+          type: string
+          format: date
+        time_from:
+          type: string
+          format: time
+        time_to:
+          type: string
+          format: time
+        status:
+          $ref: '#/components/schemas/Status627Enum'
+      required:
+      - course_name
+      - id
+      - lesson_date
+      - time_from
+      - time_to
+    LessonWriteRequest:
+      type: object
+      properties:
+        schedule_rule_id:
+          type: integer
+          nullable: true
+        hall_id:
+          type: integer
+          nullable: true
+        lesson_date:
+          type: string
+          format: date
+        time_from:
+          type: string
+          format: time
+        time_to:
+          type: string
+          format: time
+        location_text:
+          type: string
+          maxLength: 255
+        status:
+          $ref: '#/components/schemas/Status627Enum'
+      required:
+      - lesson_date
+      - time_from
+      - time_to
+    LevelEnum:
+      enum:
+      - beginner
+      - intermediate
+      - advanced
+      - any
+      type: string
+      description: |-
+        * `beginner` - Начинающий
+        * `intermediate` - Средний
+        * `advanced` - Продвинутый
+        * `any` - Любой
+    Login:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+      required:
+      - email
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - email
+      - password
+    Logout:
+      type: object
+      properties:
+        refresh:
+          type: string
+      required:
+      - refresh
+    LogoutRequest:
+      type: object
+      properties:
+        refresh:
+          type: string
+          minLength: 1
+      required:
+      - refresh
+    MapPoint:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 255
+        city:
+          type: string
+          readOnly: true
+        address:
+          type: string
+          maxLength: 255
+        metro:
+          type: string
+          maxLength: 128
+        lat:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,6})?$
+          nullable: true
+        lng:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,6})?$
+          nullable: true
+        image:
+          type: string
+          format: uri
+          maxLength: 200
+        halls_count:
+          type: integer
+          readOnly: true
+        active_courses_count:
+          type: integer
+          readOnly: true
+        dance_styles:
+          type: array
+          items:
+            type: string
+          readOnly: true
+      required:
+      - active_courses_count
+      - address
+      - city
+      - dance_styles
+      - halls_count
+      - id
+      - name
+    Me:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        username:
+          type: string
+          title: Имя пользователя
+          description: Обязательное поле. Не более 150 символов. Только буквы, цифры
+            и символы @/./+/-/_.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        first_name:
+          type: string
+          title: Имя
+          maxLength: 150
+        last_name:
+          type: string
+          title: Фамилия
+          maxLength: 150
+        phone:
+          type: string
+          maxLength: 32
+        avatar:
+          type: string
+          format: uri
+          maxLength: 200
+        city:
+          type: string
+          readOnly: true
+        city_id:
+          type: integer
+          readOnly: true
+        dance_level:
+          oneOf:
+          - $ref: '#/components/schemas/DanceLevelEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        role:
+          $ref: '#/components/schemas/RoleEnum'
+        is_teacher_enabled:
+          type: boolean
+        survey_completed:
+          type: boolean
+        favorite_course_ids:
+          type: array
+          items:
+            type: integer
+          readOnly: true
+        favorite_teacher_ids:
+          type: array
+          items:
+            type: integer
+          readOnly: true
+        skills:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserSkill'
+          readOnly: true
+      required:
+      - city
+      - city_id
+      - email
+      - favorite_course_ids
+      - favorite_teacher_ids
+      - id
+      - skills
+      - username
+    MeUpdateRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 1
+          title: Имя пользователя
+          description: Обязательное поле. Не более 150 символов. Только буквы, цифры
+            и символы @/./+/-/_.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        first_name:
+          type: string
+          title: Имя
+          maxLength: 150
+        last_name:
+          type: string
+          title: Фамилия
+          maxLength: 150
+        phone:
+          type: string
+          maxLength: 32
+        avatar:
+          type: string
+          format: uri
+          maxLength: 200
+        city_id:
+          type: integer
+          nullable: true
+        dance_level:
+          oneOf:
+          - $ref: '#/components/schemas/DanceLevelEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        survey_completed:
+          type: boolean
+      required:
+      - username
+    MyCourse:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        enrolled_at:
+          type: string
+          format: date
+        status:
+          $ref: '#/components/schemas/Status772Enum'
+        paid:
+          type: boolean
+        cancelled_at:
+          type: string
+          format: date-time
+          nullable: true
+        teacher:
+          type: object
+          additionalProperties: {}
+          readOnly: true
+        dance_style:
+          type: string
+          readOnly: true
+        studio:
+          type: string
+          readOnly: true
+        city:
+          type: string
+          readOnly: true
+        course:
+          type: object
+          additionalProperties: {}
+          readOnly: true
+      required:
+      - city
+      - course
+      - dance_style
+      - enrolled_at
+      - id
+      - studio
+      - teacher
+    PatchedCourseWriteRequest:
+      type: object
+      properties:
+        teacher_id:
+          type: integer
+          writeOnly: true
+        dance_style_id:
+          type: integer
+        studio_id:
+          type: integer
+          nullable: true
+        hall_id:
+          type: integer
+          nullable: true
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+        level:
+          $ref: '#/components/schemas/LevelEnum'
+        price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+        capacity:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        date_from:
+          type: string
+          format: date
+        date_to:
+          type: string
+          format: date
+        status:
+          $ref: '#/components/schemas/StatusE0cEnum'
+        image_cover:
+          type: string
+          format: uri
+          maxLength: 200
+    PatchedLessonWriteRequest:
+      type: object
+      properties:
+        schedule_rule_id:
+          type: integer
+          nullable: true
+        hall_id:
+          type: integer
+          nullable: true
+        lesson_date:
+          type: string
+          format: date
+        time_from:
+          type: string
+          format: time
+        time_to:
+          type: string
+          format: time
+        location_text:
+          type: string
+          maxLength: 255
+        status:
+          $ref: '#/components/schemas/Status627Enum'
+    PatchedMeUpdateRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 1
+          title: Имя пользователя
+          description: Обязательное поле. Не более 150 символов. Только буквы, цифры
+            и символы @/./+/-/_.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        first_name:
+          type: string
+          title: Имя
+          maxLength: 150
+        last_name:
+          type: string
+          title: Фамилия
+          maxLength: 150
+        phone:
+          type: string
+          maxLength: 32
+        avatar:
+          type: string
+          format: uri
+          maxLength: 200
+        city_id:
+          type: integer
+          nullable: true
+        dance_level:
+          oneOf:
+          - $ref: '#/components/schemas/DanceLevelEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        survey_completed:
+          type: boolean
+    PatchedUserPreferenceRequest:
+      type: object
+      properties:
+        city_id:
+          type: integer
+          nullable: true
+        level:
+          oneOf:
+          - $ref: '#/components/schemas/LevelEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        preferred_time_from:
+          type: string
+          format: time
+          nullable: true
+        preferred_time_to:
+          type: string
+          format: time
+          nullable: true
+        price_from:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+          nullable: true
+        price_to:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+          nullable: true
+        goal:
+          type: string
+          maxLength: 255
+        preferred_dance_style_ids:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+          writeOnly: true
+        preferred_weekdays:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 3
+    Register:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        username:
+          type: string
+          title: Имя пользователя
+          description: Обязательное поле. Не более 150 символов. Только буквы, цифры
+            и символы @/./+/-/_.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        first_name:
+          type: string
+          title: Имя
+          maxLength: 150
+        last_name:
+          type: string
+          title: Фамилия
+          maxLength: 150
+        phone:
+          type: string
+          maxLength: 32
+      required:
+      - email
+      - username
+    RegisterRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+          maxLength: 254
+        username:
+          type: string
+          minLength: 1
+          title: Имя пользователя
+          description: Обязательное поле. Не более 150 символов. Только буквы, цифры
+            и символы @/./+/-/_.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        first_name:
+          type: string
+          title: Имя
+          maxLength: 150
+        last_name:
+          type: string
+          title: Фамилия
+          maxLength: 150
+        phone:
+          type: string
+          maxLength: 32
+        password:
+          type: string
+          writeOnly: true
+          minLength: 8
+        password_confirm:
+          type: string
+          writeOnly: true
+          minLength: 8
+      required:
+      - email
+      - password
+      - password_confirm
+      - username
+    RoleEnum:
+      enum:
+      - student
+      - teacher
+      - admin
+      type: string
+      description: |-
+        * `student` - Ученик
+        * `teacher` - Преподаватель
+        * `admin` - Администратор
+    Status27cEnum:
+      enum:
+      - present
+      - absent
+      - late
+      - excused
+      type: string
+      description: |-
+        * `present` - Присутствовал
+        * `absent` - Отсутствовал
+        * `late` - Опоздал
+        * `excused` - Уважительная причина
+    Status627Enum:
+      enum:
+      - scheduled
+      - cancelled
+      - completed
+      type: string
+      description: |-
+        * `scheduled` - Запланировано
+        * `cancelled` - Отменено
+        * `completed` - Проведено
+    Status772Enum:
+      enum:
+      - active
+      - pending
+      - cancelled
+      - completed
+      type: string
+      description: |-
+        * `active` - Активна
+        * `pending` - Ожидает оплаты
+        * `cancelled` - Отменена
+        * `completed` - Завершена
+    StatusE0cEnum:
+      enum:
+      - draft
+      - published
+      - cancelled
+      - completed
+      type: string
+      description: |-
+        * `draft` - Черновик
+        * `published` - Опубликован
+        * `cancelled` - Отменен
+        * `completed` - Завершен
+    StudentDashboard:
+      type: object
+      properties:
+        active_courses_count:
+          type: integer
+        favorites_count:
+          type: integer
+        upcoming_lessons_count:
+          type: integer
+        nearest_lessons:
+          type: array
+          items:
+            $ref: '#/components/schemas/LessonDashboardItem'
+      required:
+      - active_courses_count
+      - favorites_count
+      - nearest_lessons
+      - upcoming_lessons_count
+    Studio:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 255
+        city:
+          type: string
+          readOnly: true
+        address:
+          type: string
+          maxLength: 255
+        metro:
+          type: string
+          maxLength: 128
+        lat:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,6})?$
+          nullable: true
+        lng:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,6})?$
+          nullable: true
+        image:
+          type: string
+          format: uri
+          maxLength: 200
+      required:
+      - address
+      - city
+      - id
+      - name
+    StudioDetail:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 255
+        city:
+          type: string
+          readOnly: true
+        address:
+          type: string
+          maxLength: 255
+        metro:
+          type: string
+          maxLength: 128
+        lat:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,6})?$
+          nullable: true
+        lng:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,6})?$
+          nullable: true
+        image:
+          type: string
+          format: uri
+          maxLength: 200
+        courses_count:
+          type: integer
+          readOnly: true
+        halls:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          readOnly: true
+      required:
+      - address
+      - city
+      - courses_count
+      - halls
+      - id
+      - name
+    TeacherAchievement:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        title:
+          type: string
+          maxLength: 255
+        description:
+          type: string
+        achieved_at:
+          type: string
+          format: date
+          nullable: true
+      required:
+      - id
+      - title
+    TeacherCourseList:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 255
+        description:
+          type: string
+        level:
+          $ref: '#/components/schemas/LevelEnum'
+        price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+        date_from:
+          type: string
+          format: date
+        date_to:
+          type: string
+          format: date
+        status:
+          $ref: '#/components/schemas/StatusE0cEnum'
+        dance_style:
+          type: string
+          readOnly: true
+        studio:
+          type: string
+          readOnly: true
+      required:
+      - dance_style
+      - date_from
+      - date_to
+      - id
+      - level
+      - name
+      - price
+      - studio
+    TeacherCourseShort:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 255
+        dance_style:
+          type: string
+          readOnly: true
+        level:
+          $ref: '#/components/schemas/LevelEnum'
+        price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+        date_from:
+          type: string
+          format: date
+        date_to:
+          type: string
+          format: date
+        status:
+          $ref: '#/components/schemas/StatusE0cEnum'
+        studio:
+          type: string
+          readOnly: true
+      required:
+      - dance_style
+      - date_from
+      - date_to
+      - id
+      - level
+      - name
+      - price
+      - studio
+    TeacherDashboard:
+      type: object
+      properties:
+        courses_count:
+          type: integer
+        students_count:
+          type: integer
+        upcoming_lessons_count:
+          type: integer
+        attendance_rate:
+          type: number
+          format: double
+        courses:
+          type: array
+          items:
+            $ref: '#/components/schemas/CourseDashboardItem'
+        nearest_lessons:
+          type: array
+          items:
+            $ref: '#/components/schemas/LessonDashboardItem'
+      required:
+      - attendance_rate
+      - courses
+      - courses_count
+      - nearest_lessons
+      - students_count
+      - upcoming_lessons_count
+    TeacherDetail:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        full_name:
+          type: string
+          readOnly: true
+        bio:
+          type: string
+        experience_years:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        rating_avg:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,1}(?:\.\d{0,2})?$
+        rating_count:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        city:
+          type: string
+          readOnly: true
+        email:
+          type: string
+          format: email
+          readOnly: true
+        phone:
+          type: string
+          readOnly: true
+        avatar:
+          type: string
+          readOnly: true
+        specializations:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          readOnly: true
+        achievements:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherAchievement'
+          readOnly: true
+        reviews:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherReview'
+          readOnly: true
+        courses:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeacherCourseShort'
+          readOnly: true
+      required:
+      - achievements
+      - avatar
+      - city
+      - courses
+      - email
+      - full_name
+      - id
+      - phone
+      - reviews
+      - specializations
+    TeacherList:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        full_name:
+          type: string
+          readOnly: true
+        bio:
+          type: string
+        experience_years:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        rating_avg:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,1}(?:\.\d{0,2})?$
+        rating_count:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        city:
+          type: string
+          readOnly: true
+      required:
+      - city
+      - full_name
+      - id
+    TeacherReview:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        author_name:
+          type: string
+          readOnly: true
+        rating:
+          type: integer
+          maximum: 32767
+          minimum: 0
+        text:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - author_name
+      - created_at
+      - id
+      - rating
+    TeacherReviewCreate:
+      type: object
+      properties:
+        rating:
+          type: integer
+          maximum: 5
+          minimum: 1
+        text:
+          type: string
+      required:
+      - rating
+    TeacherReviewCreateRequest:
+      type: object
+      properties:
+        rating:
+          type: integer
+          maximum: 5
+          minimum: 1
+        text:
+          type: string
+      required:
+      - rating
+    TeachingCourse:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 255
+        level:
+          $ref: '#/components/schemas/LevelEnum'
+        price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+        date_from:
+          type: string
+          format: date
+        date_to:
+          type: string
+          format: date
+        status:
+          $ref: '#/components/schemas/StatusE0cEnum'
+        dance_style:
+          type: string
+          readOnly: true
+        studio:
+          type: string
+          readOnly: true
+        students_count:
+          type: integer
+          readOnly: true
+        lessons_count:
+          type: integer
+          readOnly: true
+      required:
+      - dance_style
+      - date_from
+      - date_to
+      - id
+      - lessons_count
+      - level
+      - name
+      - price
+      - students_count
+      - studio
+    TokenRefresh:
+      type: object
+      properties:
+        access:
+          type: string
+          readOnly: true
+      required:
+      - access
+    TokenRefreshRequest:
+      type: object
+      properties:
+        refresh:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - refresh
+    UserPreference:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        city:
+          type: string
+          readOnly: true
+        city_id:
+          type: integer
+          nullable: true
+        level:
+          oneOf:
+          - $ref: '#/components/schemas/LevelEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        preferred_time_from:
+          type: string
+          format: time
+          nullable: true
+        preferred_time_to:
+          type: string
+          format: time
+          nullable: true
+        price_from:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+          nullable: true
+        price_to:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+          nullable: true
+        goal:
+          type: string
+          maxLength: 255
+        preferred_dance_styles:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          readOnly: true
+        preferred_weekdays:
+          type: array
+          items:
+            type: string
+            maxLength: 3
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - city
+      - created_at
+      - id
+      - preferred_dance_styles
+      - updated_at
+    UserSkill:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        dance_style_id:
+          type: integer
+          readOnly: true
+        dance_style:
+          type: string
+          readOnly: true
+        dance_style_slug:
+          type: string
+          readOnly: true
+        level:
+          $ref: '#/components/schemas/LevelEnum'
+      required:
+      - dance_style
+      - dance_style_id
+      - dance_style_slug
+      - id
+      - level
+    UserSkillWriteItemRequest:
+      type: object
+      properties:
+        dance_style_id:
+          type: integer
+        level:
+          $ref: '#/components/schemas/LevelEnum'
+      required:
+      - dance_style_id
+      - level
+    WeekdayEnum:
+      enum:
+      - mon
+      - tue
+      - wed
+      - thu
+      - fri
+      - sat
+      - sun
+      type: string
+      description: |-
+        * `mon` - Понедельник
+        * `tue` - Вторник
+        * `wed` - Среда
+        * `thu` - Четверг
+        * `fri` - Пятница
+        * `sat` - Суббота
+        * `sun` - Воскресенье
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: sessionid
+    jwtAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
