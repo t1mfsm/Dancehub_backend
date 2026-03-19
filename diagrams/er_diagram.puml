@@ -1,0 +1,298 @@
+@startuml
+hide circle
+skinparam linetype ortho
+skinparam class {
+    BackgroundColor White
+    ArrowColor Black
+    BorderColor Black
+}
+
+entity "Пользователь" as users {
+    * id : BIGINT
+    --
+    email : VARCHAR(254)
+    username : VARCHAR(150)
+    password : VARCHAR(128)
+    first_name : VARCHAR(150)
+    last_name : VARCHAR(150)
+    phone : VARCHAR(32)
+    avatar : VARCHAR(255)
+    dance_level : VARCHAR(16)
+    role : VARCHAR(16)
+    is_teacher_enabled : BOOLEAN
+    survey_completed : BOOLEAN
+    city_id : BIGINT
+    date_joined : TIMESTAMP
+}
+
+entity "Профиль преподавателя" as teacher_profiles {
+    * id : BIGINT
+    --
+    user_id : BIGINT
+    bio : TEXT
+    experience_years : INTEGER
+    rating_avg : DECIMAL(3,2)
+    rating_count : INTEGER
+    created_at : TIMESTAMP
+    updated_at : TIMESTAMP
+}
+
+entity "Город" as cities {
+    * id : BIGINT
+    --
+    name : VARCHAR(128)
+}
+
+entity "Танцевальный стиль" as dance_styles {
+    * id : BIGINT
+    --
+    name : VARCHAR(128)
+    slug : VARCHAR(140)
+}
+
+entity "Студия" as studios {
+    * id : BIGINT
+    --
+    name : VARCHAR(255)
+    city_id : BIGINT
+    address : VARCHAR(255)
+    metro : VARCHAR(128)
+    lat : DECIMAL(9,6)
+    lng : DECIMAL(9,6)
+    image : VARCHAR(255)
+    created_at : TIMESTAMP
+    updated_at : TIMESTAMP
+}
+
+entity "Зал" as halls {
+    * id : BIGINT
+    --
+    studio_id : BIGINT
+    name : VARCHAR(128)
+    capacity : INTEGER
+}
+
+entity "Специализация преподавателя" as teacher_specializations {
+    * id : BIGINT
+    --
+    teacher_id : BIGINT
+    dance_style_id : BIGINT
+}
+
+entity "Достижение преподавателя" as teacher_achievements {
+    * id : BIGINT
+    --
+    teacher_id : BIGINT
+    title : VARCHAR(255)
+    description : TEXT
+    achieved_at : DATE
+}
+
+entity "Отзыв о преподавателе" as teacher_reviews {
+    * id : BIGINT
+    --
+    author_user_id : BIGINT
+    teacher_id : BIGINT
+    rating : SMALLINT
+    text : TEXT
+    created_at : TIMESTAMP
+    updated_at : TIMESTAMP
+}
+
+entity "Курс" as courses {
+    * id : BIGINT
+    --
+    teacher_id : BIGINT
+    dance_style_id : BIGINT
+    studio_id : BIGINT
+    hall_id : BIGINT
+    name : VARCHAR(255)
+    description : TEXT
+    level : VARCHAR(16)
+    price : DECIMAL(10,2)
+    capacity : INTEGER
+    date_from : DATE
+    date_to : DATE
+    status : VARCHAR(16)
+    image_cover : VARCHAR(255)
+    created_at : TIMESTAMP
+    updated_at : TIMESTAMP
+}
+
+entity "Изображение курса" as course_images {
+    * id : BIGINT
+    --
+    course_id : BIGINT
+    image : VARCHAR(255)
+    sort_order : INTEGER
+}
+
+entity "Музыка курса" as course_music {
+    * id : BIGINT
+    --
+    course_id : BIGINT
+    artist : VARCHAR(255)
+    track : VARCHAR(255)
+    url : VARCHAR(255)
+}
+
+entity "Правило расписания курса" as course_schedule_rules {
+    * id : BIGINT
+    --
+    course_id : BIGINT
+    weekday : VARCHAR(3)
+    time_from : TIME
+    time_to : TIME
+    hall_id : BIGINT
+    location_text : VARCHAR(255)
+}
+
+entity "Занятие" as lessons {
+    * id : BIGINT
+    --
+    course_id : BIGINT
+    schedule_rule_id : BIGINT
+    hall_id : BIGINT
+    lesson_date : DATE
+    time_from : TIME
+    time_to : TIME
+    location_text : VARCHAR(255)
+    status : VARCHAR(16)
+    created_at : TIMESTAMP
+    updated_at : TIMESTAMP
+}
+
+entity "Запись на курс" as enrollments {
+    * id : BIGINT
+    --
+    user_id : BIGINT
+    course_id : BIGINT
+    enrolled_at : DATE
+    status : VARCHAR(16)
+    paid : BOOLEAN
+    cancelled_at : TIMESTAMP
+    created_at : TIMESTAMP
+    updated_at : TIMESTAMP
+}
+
+entity "Посещаемость" as attendance {
+    * id : BIGINT
+    --
+    lesson_id : BIGINT
+    student_id : BIGINT
+    status : VARCHAR(16)
+    marked_at : TIMESTAMP
+}
+
+entity "Отзыв о курсе" as reviews {
+    * id : BIGINT
+    --
+    author_user_id : BIGINT
+    course_id : BIGINT
+    rating : SMALLINT
+    text : TEXT
+    created_at : TIMESTAMP
+    updated_at : TIMESTAMP
+}
+
+entity "Избранный курс" as favorite_courses {
+    * id : BIGINT
+    --
+    user_id : BIGINT
+    course_id : BIGINT
+    created_at : TIMESTAMP
+}
+
+entity "Избранный преподаватель" as favorite_teachers {
+    * id : BIGINT
+    --
+    user_id : BIGINT
+    teacher_id : BIGINT
+    created_at : TIMESTAMP
+}
+
+entity "Предпочтения пользователя" as user_preferences {
+    * id : BIGINT
+    --
+    user_id : BIGINT
+    city_id : BIGINT
+    level : VARCHAR(16)
+    preferred_time_from : TIME
+    preferred_time_to : TIME
+    price_from : DECIMAL(10,2)
+    price_to : DECIMAL(10,2)
+    goal : VARCHAR(255)
+    created_at : TIMESTAMP
+    updated_at : TIMESTAMP
+}
+
+entity "Предпочитаемый стиль" as user_preferred_dance_styles {
+    * id : BIGINT
+    --
+    preference_id : BIGINT
+    dance_style_id : BIGINT
+}
+
+entity "Предпочитаемый день" as user_preferred_weekdays {
+    * id : BIGINT
+    --
+    preference_id : BIGINT
+    weekday : VARCHAR(3)
+}
+
+entity "Навык пользователя" as user_skills {
+    * id : BIGINT
+    --
+    user_id : BIGINT
+    dance_style_id : BIGINT
+    level : VARCHAR(16)
+}
+
+cities ||--o{ users
+cities ||--o{ studios
+cities ||--o{ user_preferences
+
+users ||--o| teacher_profiles
+users ||--o| user_preferences
+users ||--o{ enrollments
+users ||--o{ attendance
+users ||--o{ reviews
+users ||--o{ teacher_reviews
+users ||--o{ favorite_courses
+users ||--o{ favorite_teachers
+users ||--o{ user_skills
+
+teacher_profiles ||--o{ teacher_specializations
+teacher_profiles ||--o{ teacher_achievements
+teacher_profiles ||--o{ teacher_reviews
+teacher_profiles ||--o{ courses
+teacher_profiles ||--o{ favorite_teachers
+
+dance_styles ||--o{ teacher_specializations
+dance_styles ||--o{ courses
+dance_styles ||--o{ user_preferred_dance_styles
+dance_styles ||--o{ user_skills
+
+studios ||--o{ halls
+studios ||--o{ courses
+
+halls ||--o{ courses
+halls ||--o{ course_schedule_rules
+halls ||--o{ lessons
+
+courses ||--o{ course_images
+courses ||--o| course_music
+courses ||--o{ course_schedule_rules
+courses ||--o{ lessons
+courses ||--o{ enrollments
+courses ||--o{ reviews
+courses ||--o{ favorite_courses
+
+course_schedule_rules ||--o{ lessons
+
+lessons ||--o{ attendance
+
+user_preferences ||--o{ user_preferred_dance_styles
+user_preferences ||--o{ user_preferred_weekdays
+
+@enduml
