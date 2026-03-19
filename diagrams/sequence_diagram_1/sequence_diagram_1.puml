@@ -1,0 +1,82 @@
+@startuml
+title Диаграмма последовательности 1. Аутентификация, профиль и рекомендации
+
+actor "Фронт\n(пользователь)" as FrontUser
+participant "Домен пользователей" as UsersDomain
+participant "Домен рекомендаций" as RecommendationDomain
+
+FrontUser -> UsersDomain : 1 : POST /api/auth/register/\n(email, password, username)
+activate UsersDomain
+UsersDomain --> FrontUser : 2 : 201 Created, данные пользователя
+deactivate UsersDomain
+
+FrontUser -> UsersDomain : 3 : POST /api/auth/login/\n(email, password)
+activate UsersDomain
+UsersDomain --> FrontUser : 4 : 200 OK, JWT access/refresh
+deactivate UsersDomain
+
+FrontUser -> UsersDomain : 5 : POST /api/auth/refresh/\n(refresh token)
+activate UsersDomain
+UsersDomain --> FrontUser : 6 : 200 OK, новый access token
+deactivate UsersDomain
+
+FrontUser -> UsersDomain : 7 : GET /api/me/
+activate UsersDomain
+UsersDomain --> FrontUser : 8 : JSON данные текущего пользователя
+deactivate UsersDomain
+
+FrontUser -> UsersDomain : 9 : PATCH /api/me/\n(JSON измененные поля профиля)
+activate UsersDomain
+UsersDomain --> FrontUser : 10 : JSON обновленный профиль
+deactivate UsersDomain
+
+FrontUser -> UsersDomain : 11 : PUT /api/me/\n(JSON полные данные профиля)
+activate UsersDomain
+UsersDomain --> FrontUser : 12 : JSON полностью обновленный профиль
+deactivate UsersDomain
+
+FrontUser -> UsersDomain : 13 : POST /api/auth/change-password/\n(old_password, new_password)
+activate UsersDomain
+UsersDomain --> FrontUser : 14 : 200 OK, пароль изменен
+deactivate UsersDomain
+
+FrontUser -> UsersDomain : 15 : GET /api/me/preferences/
+activate UsersDomain
+UsersDomain --> FrontUser : 16 : JSON предпочтения пользователя
+deactivate UsersDomain
+
+FrontUser -> UsersDomain : 17 : PATCH /api/me/preferences/\n(city, level, preferred_time,\nprice_from, price_to)
+activate UsersDomain
+UsersDomain --> FrontUser : 18 : JSON обновленные предпочтения
+deactivate UsersDomain
+
+FrontUser -> UsersDomain : 19 : GET /api/me/skills/
+activate UsersDomain
+UsersDomain --> FrontUser : 20 : JSON список навыков
+deactivate UsersDomain
+
+FrontUser -> UsersDomain : 21 : PUT /api/me/skills/\n(JSON список навыков)
+activate UsersDomain
+UsersDomain --> FrontUser : 22 : JSON обновленные навыки
+deactivate UsersDomain
+
+FrontUser -> UsersDomain : 23 : PATCH /api/me/skills/\n(JSON измененные навыки)
+activate UsersDomain
+UsersDomain --> FrontUser : 24 : JSON частично обновленные навыки
+deactivate UsersDomain
+
+FrontUser -> RecommendationDomain : 25 : GET /api/recommendations/courses/
+activate RecommendationDomain
+RecommendationDomain --> FrontUser : 26 : JSON список рекомендованных курсов,\nrecommendation_score, recommendation_reason
+deactivate RecommendationDomain
+
+FrontUser -> UsersDomain : 27 : GET /api/dashboard/student/
+activate UsersDomain
+UsersDomain --> FrontUser : 28 : JSON данные дашборда ученика
+deactivate UsersDomain
+
+FrontUser -> UsersDomain : 29 : POST /api/auth/logout/\n(refresh token)
+activate UsersDomain
+UsersDomain --> FrontUser : 30 : 200 OK, выход выполнен
+deactivate UsersDomain
+@enduml

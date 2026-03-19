@@ -1,0 +1,78 @@
+@startuml
+title Диаграмма последовательности 2. Справочники, преподаватели и каталог курсов
+
+actor "Фронт\n(пользователь)" as FrontUser
+participant "Домен справочников" as ReferenceDomain
+participant "Домен преподавателей" as TeachersDomain
+participant "Домен курсов" as CoursesDomain
+
+FrontUser -> ReferenceDomain : 1 : GET /api/cities/
+activate ReferenceDomain
+ReferenceDomain --> FrontUser : 2 : JSON список городов
+deactivate ReferenceDomain
+
+FrontUser -> ReferenceDomain : 3 : GET /api/dance-styles/
+activate ReferenceDomain
+ReferenceDomain --> FrontUser : 4 : JSON список танцевальных стилей
+deactivate ReferenceDomain
+
+FrontUser -> ReferenceDomain : 5 : GET /api/studios/
+activate ReferenceDomain
+ReferenceDomain --> FrontUser : 6 : JSON список студий
+deactivate ReferenceDomain
+
+FrontUser -> ReferenceDomain : 7 : GET /api/studios/{id}/
+activate ReferenceDomain
+ReferenceDomain --> FrontUser : 8 : JSON информация о студии
+deactivate ReferenceDomain
+
+FrontUser -> ReferenceDomain : 9 : GET /api/map/points/
+activate ReferenceDomain
+ReferenceDomain --> FrontUser : 10 : JSON точки студий для карты
+deactivate ReferenceDomain
+
+FrontUser -> TeachersDomain : 11 : GET /api/teachers/
+activate TeachersDomain
+TeachersDomain --> FrontUser : 12 : JSON список преподавателей
+deactivate TeachersDomain
+
+FrontUser -> TeachersDomain : 13 : GET /api/teachers/{id}/
+activate TeachersDomain
+TeachersDomain --> FrontUser : 14 : JSON информация о преподавателе
+deactivate TeachersDomain
+
+FrontUser -> TeachersDomain : 15 : GET /api/teachers/{id}/courses/
+activate TeachersDomain
+TeachersDomain --> FrontUser : 16 : JSON список курсов преподавателя
+deactivate TeachersDomain
+
+FrontUser -> TeachersDomain : 17 : GET /api/teachers/{id}/reviews/
+activate TeachersDomain
+TeachersDomain --> FrontUser : 18 : JSON список отзывов о преподавателе
+deactivate TeachersDomain
+
+FrontUser -> TeachersDomain : 19 : POST /api/teachers/{id}/reviews/\n(rating, text)
+activate TeachersDomain
+TeachersDomain --> FrontUser : 20 : 201 Created, отзыв о преподавателе
+deactivate TeachersDomain
+
+FrontUser -> CoursesDomain : 21 : GET /api/courses/
+activate CoursesDomain
+CoursesDomain --> FrontUser : 22 : JSON список курсов
+deactivate CoursesDomain
+
+FrontUser -> CoursesDomain : 23 : GET /api/courses/{id}/
+activate CoursesDomain
+CoursesDomain --> FrontUser : 24 : JSON информация о курсе
+deactivate CoursesDomain
+
+FrontUser -> CoursesDomain : 25 : GET /api/courses/{id}/reviews/
+activate CoursesDomain
+CoursesDomain --> FrontUser : 26 : JSON список отзывов о курсе
+deactivate CoursesDomain
+
+FrontUser -> CoursesDomain : 27 : POST /api/courses/{id}/reviews/\n(rating, text)
+activate CoursesDomain
+CoursesDomain --> FrontUser : 28 : 201 Created, отзыв о курсе
+deactivate CoursesDomain
+@enduml

@@ -1,0 +1,63 @@
+@startuml
+title Диаграмма последовательности 3. Избранное, запись на курс и календарь
+
+actor "Фронт\n(пользователь)" as FrontUser
+participant "Домен записей" as EnrollmentsDomain
+participant "Домен занятий" as LessonsDomain
+participant "Домен курсов" as CoursesDomain
+
+FrontUser -> EnrollmentsDomain : 1 : GET /api/enrollments/
+activate EnrollmentsDomain
+EnrollmentsDomain --> FrontUser : 2 : JSON список записей пользователя
+deactivate EnrollmentsDomain
+
+FrontUser -> EnrollmentsDomain : 3 : GET /api/favorites/
+activate EnrollmentsDomain
+EnrollmentsDomain --> FrontUser : 4 : JSON список избранных курсов
+deactivate EnrollmentsDomain
+
+FrontUser -> EnrollmentsDomain : 5 : POST /api/favorite-courses/{course_id}/
+activate EnrollmentsDomain
+EnrollmentsDomain --> FrontUser : 6 : 201 Created, курс добавлен в избранное
+deactivate EnrollmentsDomain
+
+FrontUser -> EnrollmentsDomain : 7 : DELETE /api/favorite-courses/{course_id}/
+activate EnrollmentsDomain
+EnrollmentsDomain --> FrontUser : 8 : 204 No Content, курс удален из избранного
+deactivate EnrollmentsDomain
+
+FrontUser -> EnrollmentsDomain : 9 : POST /api/favorite-teachers/{teacher_id}/
+activate EnrollmentsDomain
+EnrollmentsDomain --> FrontUser : 10 : 201 Created, преподаватель добавлен в избранное
+deactivate EnrollmentsDomain
+
+FrontUser -> EnrollmentsDomain : 11 : DELETE /api/favorite-teachers/{teacher_id}/
+activate EnrollmentsDomain
+EnrollmentsDomain --> FrontUser : 12 : 204 No Content, преподаватель удален из избранного
+deactivate EnrollmentsDomain
+
+FrontUser -> EnrollmentsDomain : 13 : POST /api/courses/{course_id}/enroll/
+activate EnrollmentsDomain
+EnrollmentsDomain --> FrontUser : 14 : 201 Created, запись на курс
+deactivate EnrollmentsDomain
+
+FrontUser -> EnrollmentsDomain : 15 : DELETE /api/courses/{course_id}/enroll/
+activate EnrollmentsDomain
+EnrollmentsDomain --> FrontUser : 16 : 204 No Content, запись отменена
+deactivate EnrollmentsDomain
+
+FrontUser -> EnrollmentsDomain : 17 : GET /api/my-courses/
+activate EnrollmentsDomain
+EnrollmentsDomain --> FrontUser : 18 : JSON список курсов пользователя
+deactivate EnrollmentsDomain
+
+FrontUser -> LessonsDomain : 19 : GET /api/calendar/
+activate LessonsDomain
+LessonsDomain --> FrontUser : 20 : JSON календарь занятий пользователя
+deactivate LessonsDomain
+
+FrontUser -> CoursesDomain : 21 : GET /api/courses/{id}/lessons/
+activate CoursesDomain
+CoursesDomain --> FrontUser : 22 : JSON список занятий курса
+deactivate CoursesDomain
+@enduml

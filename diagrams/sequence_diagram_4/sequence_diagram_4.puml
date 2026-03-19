@@ -1,0 +1,83 @@
+@startuml
+title Диаграмма последовательности 4. Преподавательский режим
+
+actor "Фронт\n(преподаватель)" as FrontTeacher
+participant "Домен преподавателей" as TeachersDomain
+participant "Домен курсов" as CoursesDomain
+participant "Домен занятий" as LessonsDomain
+
+FrontTeacher -> TeachersDomain : 1 : GET /api/my-teaching-courses/
+activate TeachersDomain
+TeachersDomain --> FrontTeacher : 2 : JSON список курсов преподавателя
+deactivate TeachersDomain
+
+FrontTeacher -> TeachersDomain : 3 : GET /api/dashboard/teacher/
+activate TeachersDomain
+TeachersDomain --> FrontTeacher : 4 : JSON данные дашборда преподавателя
+deactivate TeachersDomain
+
+FrontTeacher -> CoursesDomain : 5 : POST /api/courses/\n(JSON данные курса)
+activate CoursesDomain
+CoursesDomain --> FrontTeacher : 6 : 201 Created, новый курс
+deactivate CoursesDomain
+
+FrontTeacher -> CoursesDomain : 7 : PATCH /api/courses/{id}/\n(JSON измененные поля)
+activate CoursesDomain
+CoursesDomain --> FrontTeacher : 8 : JSON обновленный курс
+deactivate CoursesDomain
+
+FrontTeacher -> CoursesDomain : 9 : PUT /api/courses/{id}/\n(JSON полные данные курса)
+activate CoursesDomain
+CoursesDomain --> FrontTeacher : 10 : JSON полностью обновленный курс
+deactivate CoursesDomain
+
+FrontTeacher -> CoursesDomain : 11 : DELETE /api/courses/{id}/
+activate CoursesDomain
+CoursesDomain --> FrontTeacher : 12 : 204 No Content, курс удален
+deactivate CoursesDomain
+
+FrontTeacher -> CoursesDomain : 13 : GET /api/courses/{id}/students/
+activate CoursesDomain
+CoursesDomain --> FrontTeacher : 14 : JSON список студентов курса
+deactivate CoursesDomain
+
+FrontTeacher -> CoursesDomain : 15 : GET /api/courses/{id}/lessons/
+activate CoursesDomain
+CoursesDomain --> FrontTeacher : 16 : JSON список занятий курса
+deactivate CoursesDomain
+
+FrontTeacher -> LessonsDomain : 17 : POST /api/courses/{id}/lessons/\n(JSON данные занятия)
+activate LessonsDomain
+LessonsDomain --> FrontTeacher : 18 : 201 Created, новое занятие
+deactivate LessonsDomain
+
+FrontTeacher -> LessonsDomain : 19 : PATCH /api/lessons/{id}/\n(JSON измененные поля)
+activate LessonsDomain
+LessonsDomain --> FrontTeacher : 20 : JSON обновленное занятие
+deactivate LessonsDomain
+
+FrontTeacher -> LessonsDomain : 21 : PUT /api/lessons/{id}/\n(JSON полные данные занятия)
+activate LessonsDomain
+LessonsDomain --> FrontTeacher : 22 : JSON полностью обновленное занятие
+deactivate LessonsDomain
+
+FrontTeacher -> LessonsDomain : 23 : DELETE /api/lessons/{id}/
+activate LessonsDomain
+LessonsDomain --> FrontTeacher : 24 : 204 No Content, занятие удалено
+deactivate LessonsDomain
+
+FrontTeacher -> LessonsDomain : 25 : GET /api/courses/{id}/attendance/
+activate LessonsDomain
+LessonsDomain --> FrontTeacher : 26 : JSON посещаемость по курсу
+deactivate LessonsDomain
+
+FrontTeacher -> LessonsDomain : 27 : GET /api/lessons/{lesson_id}/attendance/
+activate LessonsDomain
+LessonsDomain --> FrontTeacher : 28 : JSON посещаемость по занятию
+deactivate LessonsDomain
+
+FrontTeacher -> LessonsDomain : 29 : POST /api/lessons/{lesson_id}/attendance/mark/\n(student_id, status)
+activate LessonsDomain
+LessonsDomain --> FrontTeacher : 30 : JSON обновленная отметка посещаемости
+deactivate LessonsDomain
+@enduml
