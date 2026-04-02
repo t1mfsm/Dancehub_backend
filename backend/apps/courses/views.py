@@ -147,6 +147,7 @@ class CourseListAPIView(generics.ListCreateAPIView):
                 "studio__city",
                 "hall",
             )
+            .prefetch_related("schedule_rules", "images")
             .all()
             .order_by("date_from", "id")
         )

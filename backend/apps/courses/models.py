@@ -146,6 +146,7 @@ class Course(TimeStampedModel):
     level = models.CharField(max_length=16, choices=DanceLevel.choices)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     capacity = models.PositiveIntegerField()
+    spots_left = models.PositiveIntegerField(null=True, blank=True)
     date_from = models.DateField()
     date_to = models.DateField()
     status = models.CharField(

@@ -80,6 +80,18 @@ class MapPointSerializer(serializers.ModelSerializer):
         return list(styles)
 
 
+WEEKDAY_TO_RU = {
+    "mon": "Пн",
+    "tue": "Вт",
+    "wed": "Ср",
+    "thu": "Чт",
+    "fri": "Пт",
+    "sat": "Сб",
+    "sun": "Вс",
+}
+WEEKDAY_ORDER = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
 class CourseScheduleRuleSerializer(serializers.ModelSerializer):
     hall = serializers.CharField(source="hall.name", read_only=True)
 
@@ -95,14 +107,54 @@ class CourseScheduleRuleSerializer(serializers.ModelSerializer):
         )
 
 
+def _format_schedule(course: Course) -> list[dict]:
+    """Формат cards.ts: weekday, timeFrom, timeTo, location."""
+    rules = list(course.schedule_rules.order_by("time_from", "weekday"))
+    if not rules:
+        return []
+
+    grouped: dict[tuple, list[str]] = {}
+    for r in rules:
+        key = (r.time_from.strftime("%H:%M"), r.time_to.strftime("%H:%M"), r.location_text or "")
+        if key not in grouped:
+            grouped[key] = []
+        grouped[key].append(r.weekday)
+
+    result = []
+    for (time_from, time_to, location), weekdays in grouped.items():
+        sorted_ru = [
+            WEEKDAY_TO_RU[w]
+            for w in sorted(weekdays, key=lambda x: WEEKDAY_ORDER.index(x) if x in WEEKDAY_ORDER else 99)
+        ]
+        result.append({
+            "weekday": ", ".join(sorted_ru),
+            "timeFrom": time_from,
+            "timeTo": time_to,
+            "location": location or None,
+        })
+    return result
+
+
+def _get_images_list(course: Course) -> list[str]:
+    """Массив URL изображений (формат cards.ts: images: string[])."""
+    imgs = list(course.images.all().order_by("sort_order", "id"))
+    if imgs:
+        return [img.image for img in imgs]
+    if course.image_cover:
+        return [course.image_cover]
+    return []
+
+
 class CourseListSerializer(serializers.ModelSerializer):
     teacher_id = serializers.IntegerField(source="teacher.id", read_only=True)
     teacher_name = serializers.SerializerMethodField()
     dance_style = serializers.CharField(source="dance_style.name", read_only=True)
     dance_style_slug = serializers.CharField(source="dance_style.slug", read_only=True)
-    city = serializers.CharField(source="studio.city.name", read_only=True)
-    studio = serializers.CharField(source="studio.name", read_only=True)
-    hall = serializers.CharField(source="hall.name", read_only=True)
+    city = serializers.SerializerMethodField()
+    studio = serializers.SerializerMethodField()
+    spots_left = serializers.SerializerMethodField()
+    schedule = serializers.SerializerMethodField()
+    images = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
@@ -113,18 +165,39 @@ class CourseListSerializer(serializers.ModelSerializer):
             "level",
             "price",
             "capacity",
+            "spots_left",
             "date_from",
             "date_to",
             "status",
-            "image_cover",
+            "images",
             "teacher_id",
             "teacher_name",
             "dance_style",
             "dance_style_slug",
             "city",
             "studio",
-            "hall",
+            "schedule",
         )
+
+    def get_city(self, obj: Course) -> str:
+        return obj.studio.city.name if obj.studio and obj.studio.city else ""
+
+    def get_studio(self, obj: Course) -> str:
+        return obj.studio.name if obj.studio else ""
+
+    def get_schedule(self, obj: Course) -> list[dict]:
+        return _format_schedule(obj)
+
+    def get_images(self, obj: Course) -> list[str]:
+        return _get_images_list(obj)
+
+    def get_spots_left(self, obj: Course) -> int:
+        if obj.spots_left is not None:
+            return obj.spots_left
+        from apps.courses.models import Enrollment
+
+        active = obj.enrollments.filter(status="active").count()
+        return max(0, obj.capacity - active)
 
     def get_teacher_name(self, obj: Course) -> str:
         return obj.teacher.user.get_full_name() or obj.teacher.user.email
@@ -133,6 +206,7 @@ class CourseListSerializer(serializers.ModelSerializer):
 class CourseDetailSerializer(CourseListSerializer):
     music = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()
+    schedule = serializers.SerializerMethodField()
     schedule_rules = CourseScheduleRuleSerializer(many=True, read_only=True)
     studio_data = StudioSerializer(source="studio", read_only=True)
     reviews_count = serializers.IntegerField(source="reviews.count", read_only=True)
@@ -141,10 +215,14 @@ class CourseDetailSerializer(CourseListSerializer):
         fields = CourseListSerializer.Meta.fields + (
             "music",
             "images",
+            "schedule",
             "schedule_rules",
             "studio_data",
             "reviews_count",
         )
+
+    def get_schedule(self, obj: Course) -> list[dict]:
+        return _format_schedule(obj)
 
     def get_music(self, obj: Course) -> dict | None:
         if not hasattr(obj, "music"):
@@ -156,15 +234,8 @@ class CourseDetailSerializer(CourseListSerializer):
             "url": obj.music.url,
         }
 
-    def get_images(self, obj: Course) -> list[dict]:
-        return [
-            {
-                "id": image.id,
-                "image": image.image,
-                "sort_order": image.sort_order,
-            }
-            for image in obj.images.all()
-        ]
+    def get_images(self, obj: Course) -> list[str]:
+        return _get_images_list(obj)
 
 
 class LessonSerializer(serializers.ModelSerializer):
