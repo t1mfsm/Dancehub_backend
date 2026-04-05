@@ -29,11 +29,13 @@ from .serializers import (
     MeUpdateSerializer,
     MyCourseSerializer,
     RegisterSerializer,
+    SurveySubmitSerializer,
     StudentDashboardSerializer,
     TeacherDetailSerializer,
     TeacherDashboardSerializer,
     TeacherReviewCreateSerializer,
     TeacherReviewSerializer,
+    TeacherProfileUpdateSerializer,
     TeacherCourseListSerializer,
     TeacherListSerializer,
     TeachingCourseSerializer,
@@ -88,6 +90,24 @@ class TeacherListAPIView(generics.ListAPIView):
 
         return queryset.distinct()
 
+    @extend_schema(
+        tags=["Teachers"],
+        summary="Создать профиль преподавателя текущего пользователя",
+        description="Создает профиль преподавателя для текущего пользователя, если его еще нет.",
+        request=None,
+        responses=TeacherDetailSerializer,
+    )
+    def post(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            raise PermissionDenied("Требуется авторизация.")
+
+        if request.user.role != "teacher":
+            raise ValidationError({"detail": "Профиль преподавателя доступен только для роли teacher."})
+
+        teacher, _ = TeacherProfile.objects.get_or_create(user=request.user)
+
+        return Response(TeacherDetailSerializer(teacher).data, status=status.HTTP_201_CREATED)
+
 
 @extend_schema_view(
     get=extend_schema(
@@ -108,6 +128,49 @@ class TeacherRetrieveAPIView(generics.RetrieveAPIView):
             "courses__dance_style",
             "courses__studio",
         )
+
+    @extend_schema(
+        tags=["Teachers"],
+        summary="Обновить профиль преподавателя",
+        description="Обновляет профиль преподавателя для текущего пользователя.",
+        request=TeacherProfileUpdateSerializer,
+        responses=TeacherDetailSerializer,
+    )
+    def patch(self, request, *args, **kwargs):
+        teacher = self._get_or_create_current_teacher_profile(request)
+        serializer = TeacherProfileUpdateSerializer(teacher, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        teacher.refresh_from_db()
+
+        return Response(TeacherDetailSerializer(teacher).data)
+
+    @extend_schema(
+        tags=["Teachers"],
+        summary="Полностью обновить профиль преподавателя",
+        description="Полностью обновляет профиль преподавателя для текущего пользователя.",
+        request=TeacherProfileUpdateSerializer,
+        responses=TeacherDetailSerializer,
+    )
+    def put(self, request, *args, **kwargs):
+        teacher = self._get_or_create_current_teacher_profile(request)
+        serializer = TeacherProfileUpdateSerializer(teacher, data=request.data, partial=False)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        teacher.refresh_from_db()
+
+        return Response(TeacherDetailSerializer(teacher).data)
+
+    def _get_or_create_current_teacher_profile(self, request) -> TeacherProfile:
+        if request.user.role != "teacher":
+            raise ValidationError({"detail": "Профиль преподавателя доступен только для роли teacher."})
+
+        teacher = TeacherProfile.objects.filter(user=request.user).first()
+
+        if teacher is None:
+            teacher = TeacherProfile.objects.create(user=request.user)
+
+        return teacher
 
 
 @extend_schema_view(
@@ -439,17 +502,25 @@ class UserSkillAPIView(APIView):
         fresh = request.user.skills.select_related("dance_style").all().order_by("dance_style__name")
         return Response(UserSkillSerializer(fresh, many=True).data)
 
+
+@extend_schema_view(
+    patch=extend_schema(
+        tags=["Users"],
+        summary="Сохранить опрос пользователя",
+        description="Сохраняет предпочтения, навыки и помечает опрос завершенным.",
+        request=SurveySubmitSerializer,
+        responses=MeSerializer,
+    ),
+)
+class UserSurveyAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [JWTAuthentication, SessionAuthentication]
+
     def patch(self, request):
-        serializer = UserSkillWriteItemSerializer(data=request.data, many=True)
+        serializer = SurveySubmitSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
-        for item in serializer.validated_data:
-            UserSkill.objects.update_or_create(
-                user=request.user,
-                dance_style=item["dance_style"],
-                defaults={"level": item["level"]},
-            )
-        fresh = request.user.skills.select_related("dance_style").all().order_by("dance_style__name")
-        return Response(UserSkillSerializer(fresh, many=True).data)
+        user = serializer.save()
+        return Response(MeSerializer(user).data)
 
 
 @extend_schema_view(

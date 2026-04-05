@@ -22,6 +22,7 @@ from .views import (
     TeacherReviewCreateAPIView,
     TeacherRetrieveAPIView,
     UserPreferenceAPIView,
+    UserSurveyAPIView,
     UserSkillAPIView,
 )
 
@@ -38,9 +39,10 @@ urlpatterns = [
     path("teachers/<int:id>/", TeacherRetrieveAPIView.as_view(), name="teacher-detail"),
     path("teachers/<int:id>/courses/", TeacherCourseListAPIView.as_view(), name="teacher-course-list"),
     path("reviews/teachers/<int:teacher_id>/", TeacherReviewCreateAPIView.as_view(), name="teacher-review-create"),
-    path("me/", MeAPIView.as_view(), name="me"),
-    path("me/preferences/", UserPreferenceAPIView.as_view(), name="me-preferences"),
-    path("me/skills/", UserSkillAPIView.as_view(), name="me-skills"),
+    path("user/", MeAPIView.as_view(), name="user"),
+    path("user/survey/", UserSurveyAPIView.as_view(), name="user-survey"),
+    path("user/preferences/", UserPreferenceAPIView.as_view(), name="user-preferences"),
+    path("user/skills/", UserSkillAPIView.as_view(), name="user-skills"),
     path("dashboard/student/", StudentDashboardAPIView.as_view(), name="student-dashboard"),
     path("dashboard/teacher/", TeacherDashboardAPIView.as_view(), name="teacher-dashboard"),
     path("recommendations/courses/", RecommendedCourseListAPIView.as_view(), name="course-recommendations"),
