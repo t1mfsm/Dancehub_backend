@@ -21,3 +21,5 @@ urlpatterns = [
 
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    if settings.FRONTEND_ASSETS_ROOT.exists():
+        urlpatterns += static(settings.FRONTEND_ASSETS_URL, document_root=settings.FRONTEND_ASSETS_ROOT)

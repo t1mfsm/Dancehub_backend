@@ -273,10 +273,10 @@ class CourseRetrieveAPIView(generics.RetrieveUpdateDestroyAPIView):
         teacher_id = serializer.validated_data.pop("teacher_id", None)
         if teacher_id and request.user.is_superuser:
             teacher = generics.get_object_or_404(TeacherProfile, id=teacher_id)
-            serializer.save(teacher=teacher)
+            saved = serializer.save(teacher=teacher)
         else:
-            serializer.save()
-        return Response(CourseDetailSerializer(course, context={"request": request}).data)
+            saved = serializer.save()
+        return Response(CourseDetailSerializer(saved, context={"request": request}).data)
 
     @extend_schema(
         tags=["Courses"],

@@ -22,6 +22,16 @@ from .models import (
 )
 
 
+def _build_absolute_url(value: str | None, request) -> str:
+    if not value:
+        return ""
+    if value.startswith(("http://", "https://")):
+        return value
+    if request is None:
+        return value
+    return request.build_absolute_uri(value)
+
+
 class TeacherAchievementSerializer(serializers.ModelSerializer):
     class Meta:
         model = TeacherAchievement
@@ -82,10 +92,10 @@ class TeacherDetailSerializer(TeacherListSerializer):
     user_id = serializers.IntegerField(source="user.id", read_only=True)
     name = serializers.SerializerMethodField()
     email = serializers.EmailField(source="user.email", read_only=True)
-    avatar = serializers.CharField(source="user.avatar", read_only=True)
+    avatar = serializers.SerializerMethodField()
     specializations = serializers.SerializerMethodField()
     achievements = serializers.SerializerMethodField()
-    images = serializers.ListField(child=serializers.CharField(), read_only=True)
+    images = serializers.SerializerMethodField()
     experience = serializers.IntegerField(source="experience_years", read_only=True)
     rating = serializers.SerializerMethodField()
     reviews = TeacherReviewSerializer(many=True, read_only=True)
@@ -109,6 +119,14 @@ class TeacherDetailSerializer(TeacherListSerializer):
     def get_name(self, obj: TeacherProfile) -> str:
         return obj.user.get_full_name() or obj.user.email
 
+    def get_avatar(self, obj: TeacherProfile) -> str:
+        request = self.context.get("request")
+        return _build_absolute_url(obj.user.avatar, request)
+
+    def get_images(self, obj: TeacherProfile) -> list[str]:
+        request = self.context.get("request")
+        return [_build_absolute_url(image, request) for image in obj.images]
+
     def get_rating(self, obj: TeacherProfile) -> float:
         return float(obj.rating_avg)
 
@@ -122,7 +140,7 @@ class TeacherDetailSerializer(TeacherListSerializer):
 class MeTeacherSerializer(serializers.ModelSerializer):
     specializations = serializers.SerializerMethodField()
     achievements = serializers.SerializerMethodField()
-    images = serializers.ListField(child=serializers.CharField(), read_only=True)
+    images = serializers.SerializerMethodField()
     experience = serializers.IntegerField(source="experience_years", read_only=True)
     rating = serializers.SerializerMethodField()
 
@@ -139,6 +157,10 @@ class MeTeacherSerializer(serializers.ModelSerializer):
 
     def get_rating(self, obj: TeacherProfile) -> float:
         return float(obj.rating_avg)
+
+    def get_images(self, obj: TeacherProfile) -> list[str]:
+        request = self.context.get("request")
+        return [_build_absolute_url(image, request) for image in obj.images]
 
     def get_specializations(self, obj: TeacherProfile) -> list[str]:
         return [item.dance_style.name for item in obj.specializations.select_related("dance_style").all()]

@@ -93,6 +93,10 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+FRONTEND_ASSETS_URL = "/assets/"
+FRONTEND_ASSETS_ROOT = Path("/app/frontend_assets")
+if not FRONTEND_ASSETS_ROOT.exists():
+    FRONTEND_ASSETS_ROOT = BASE_DIR.parent.parent / "f2e-front" / "src" / "assets"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
