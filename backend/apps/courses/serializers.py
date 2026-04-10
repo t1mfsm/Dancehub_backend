@@ -4,9 +4,11 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.files.storage import default_storage
+from django.utils import timezone
 from rest_framework import serializers
 
-from .models import Attendance, Course, CourseImage, CourseMusic, CourseScheduleRule, DanceStyle, Hall, Lesson, Review, Studio
+from .constants import CourseLifecycleStatus
+from .models import Attendance, Course, CourseImage, CourseScheduleRule, DanceStyle, Hall, Lesson, Review, Studio
 
 
 def _build_absolute_url(value: str | None, request) -> str:
@@ -170,6 +172,7 @@ def _get_images_list(course: Course, request=None) -> list[str]:
 
 
 class CourseListSerializer(serializers.ModelSerializer):
+    status = serializers.SerializerMethodField()
     teacher_id = serializers.IntegerField(source="teacher.id", read_only=True)
     teacher_name = serializers.SerializerMethodField()
     dance_style = serializers.CharField(source="dance_style.name", read_only=True)
@@ -177,6 +180,7 @@ class CourseListSerializer(serializers.ModelSerializer):
     studio = serializers.SerializerMethodField()
     schedule = serializers.SerializerMethodField()
     image = serializers.SerializerMethodField()
+    spots_left = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
@@ -195,6 +199,7 @@ class CourseListSerializer(serializers.ModelSerializer):
             "city",
             "studio",
             "schedule",
+            "spots_left",
         )
 
     def get_city(self, obj: Course) -> str:
@@ -214,11 +219,25 @@ class CourseListSerializer(serializers.ModelSerializer):
     def get_teacher_name(self, obj: Course) -> str:
         return obj.teacher.user.get_full_name() or obj.teacher.user.email
 
+    def get_spots_left(self, obj: Course) -> int:
+        active = obj.enrollments.filter(status="active").count()
+        return max(0, obj.capacity - active)
+
+    def get_status(self, obj: Course) -> str:
+        """Витрина: только active | completed по date_to (см. CourseLifecycleStatus)."""
+        if hasattr(obj, "activity_status"):
+            return obj.activity_status
+        today = timezone.localdate()
+        return (
+            CourseLifecycleStatus.COMPLETED
+            if obj.date_to < today
+            else CourseLifecycleStatus.ACTIVE
+        )
+
 
 class CourseDetailSerializer(CourseListSerializer):
     music = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()
-    spots_left = serializers.SerializerMethodField()
     schedule = serializers.SerializerMethodField()
 
     class Meta(CourseListSerializer.Meta):
@@ -247,31 +266,16 @@ class CourseDetailSerializer(CourseListSerializer):
         return _format_schedule(obj, include_location=True)
 
     def get_music(self, obj: Course) -> dict:
-        try:
-            music = obj.music
-        except CourseMusic.DoesNotExist:
-            return {
-                "artist": "",
-                "track": "",
-                "url": "",
-            }
-
         return {
-            "artist": music.artist,
-            "track": music.track,
-            "url": music.url,
+            "artist": obj.music_artist or "",
+            "track": obj.music_track or "",
+            "url": obj.music_url or "",
         }
 
     def get_images(self, obj: Course) -> list[str]:
         request = self.context.get("request")
         return _get_images_list(obj, request)
 
-    def get_spots_left(self, obj: Course) -> int:
-        if obj.spots_left is not None:
-            return obj.spots_left
-
-        active = obj.enrollments.filter(status="active").count()
-        return max(0, obj.capacity - active)
 
 
 class LessonSerializer(serializers.ModelSerializer):
@@ -425,6 +429,8 @@ class CourseWriteSerializer(serializers.ModelSerializer):
         write_only=True,
         required=False,
     )
+    music_artist = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    music_track = serializers.CharField(write_only=True, required=False, allow_blank=True)
     music_url = serializers.URLField(write_only=True, required=False, allow_blank=True)
     dance_style_id = serializers.PrimaryKeyRelatedField(
         source="dance_style",
@@ -468,6 +474,8 @@ class CourseWriteSerializer(serializers.ModelSerializer):
             "image_file",
             "image_files",
             "ordered_image_urls",
+            "music_artist",
+            "music_track",
             "music_url",
             "schedule",
         )
@@ -499,14 +507,12 @@ class CourseWriteSerializer(serializers.ModelSerializer):
         image_files = validated_data.pop("image_files", [])
         validated_data.pop("ordered_image_urls", None)
         schedule_data = validated_data.pop("schedule", [])
-        music_data = self._extract_music_data(validated_data)
         self._apply_uploaded_image(validated_data, image_file)
         if validated_data.get("image_cover") is None:
             validated_data["image_cover"] = ""
         course = super().create(validated_data)
         self._save_uploaded_images(course, image_files)
         self._save_schedule(course, schedule_data)
-        self._save_music(course, music_data)
         return course
 
     def update(self, instance, validated_data):
@@ -514,7 +520,6 @@ class CourseWriteSerializer(serializers.ModelSerializer):
         image_files = validated_data.pop("image_files", [])
         ordered_image_urls = validated_data.pop("ordered_image_urls", None)
         schedule_data = validated_data.pop("schedule", None)
-        music_data = self._extract_music_data(validated_data)
         self._apply_uploaded_image(validated_data, image_file)
         if validated_data.get("image_cover") is None:
             validated_data["image_cover"] = ""
@@ -525,19 +530,7 @@ class CourseWriteSerializer(serializers.ModelSerializer):
             self._apply_ordered_gallery_urls(course, ordered_image_urls)
         if schedule_data is not None:
             self._save_schedule(course, schedule_data)
-        if music_data is not None:
-            self._save_music(course, music_data)
         return course
-
-    def _extract_music_data(self, validated_data: dict) -> dict[str, str] | None:
-        if "music_url" not in validated_data:
-            return None
-
-        return {
-            "artist": "",
-            "track": "",
-            "url": (validated_data.pop("music_url", "") or "").strip(),
-        }
 
     def _save_schedule(self, course: Course, schedule_data: list[dict]) -> None:
         course.schedule_rules.all().delete()
@@ -556,19 +549,6 @@ class CourseWriteSerializer(serializers.ModelSerializer):
                 )
                 for item in schedule_data
             ]
-        )
-
-    def _save_music(self, course: Course, music_data: dict[str, str] | None) -> None:
-        if music_data is None:
-            return
-
-        if not any(music_data.values()):
-            CourseMusic.objects.filter(course=course).delete()
-            return
-
-        CourseMusic.objects.update_or_create(
-            course=course,
-            defaults=music_data,
         )
 
     @staticmethod

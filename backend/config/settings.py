@@ -19,6 +19,12 @@ CORS_ALLOWED_ORIGINS = config(
     default="http://localhost:8080,http://127.0.0.1:8080,https://localhost:8080,https://127.0.0.1:8080",
     cast=Csv(),
 )
+# Для SessionAuthentication и небезопасных методов: Origin должен совпадать (в т.ч. https:// при Vite + mkcert).
+CSRF_TRUSTED_ORIGINS = config(
+    "CSRF_TRUSTED_ORIGINS",
+    default="http://localhost:8080,http://127.0.0.1:8080,https://localhost:8080,https://127.0.0.1:8080",
+    cast=Csv(),
+)
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -104,9 +110,9 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "users.User"
 
 REST_FRAMEWORK = {
+    # Только JWT: SessionAuthentication требует CSRF для небезопасных методов при cookie-сессии — SPA на JWT этого не шлёт.
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "config.authentication.OptionalJWTAuthentication",
-        "rest_framework.authentication.SessionAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.AllowAny",

@@ -12,6 +12,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from apps.courses.models import Attendance, Course, Enrollment, FavoriteCourse, Lesson
+from apps.courses.serializers import CourseDetailSerializer
 
 from .models import FavoriteTeacher, TeacherProfile, TeacherReview, UserPreference, UserSkill
 from .serializers import (
@@ -19,7 +20,6 @@ from .serializers import (
     CourseDashboardItemSerializer,
     CourseRecommendationSerializer,
     LessonDashboardItemSerializer,
-    EnrollmentSerializer,
     FavoriteCourseSerializer,
     FavoriteTeacherSerializer,
     FavoritesResponseSerializer,
@@ -38,11 +38,23 @@ from .serializers import (
     TeacherProfileUpdateSerializer,
     TeacherCourseListSerializer,
     TeacherListSerializer,
-    TeachingCourseSerializer,
     UserPreferenceSerializer,
     UserSkillSerializer,
     UserSkillWriteItemSerializer,
 )
+
+
+def _enrollment_queryset_with_course_detail():
+    return Enrollment.objects.select_related(
+        "course__teacher__user",
+        "course__dance_style",
+        "course__studio__city",
+        "course__hall",
+    ).prefetch_related(
+        "course__images",
+        "course__schedule_rules__hall",
+        "course__reviews",
+    )
 
 
 @extend_schema_view(
@@ -317,21 +329,36 @@ class FavoriteTeacherAddAPIView(APIView):
 @extend_schema_view(
     get=extend_schema(
         tags=["Users"],
-        summary="Записи пользователя на курсы",
-        description="Возвращает записи текущего пользователя на курсы.",
+        summary="Курсы по записям пользователя",
+        description=(
+            "Возвращает полные карточки курсов (как GET /api/courses/{id}/) по всем записям "
+            "текущего пользователя, кроме отменённых."
+        ),
+        responses=CourseDetailSerializer(many=True),
     )
 )
 class EnrollmentListAPIView(generics.ListAPIView):
-    serializer_class = EnrollmentSerializer
+    serializer_class = CourseDetailSerializer
     permission_classes = [permissions.IsAuthenticated]
     authentication_classes = [JWTAuthentication, SessionAuthentication]
 
     def get_queryset(self):
         return (
-            Enrollment.objects.select_related("course")
+            _enrollment_queryset_with_course_detail()
             .filter(user=self.request.user)
+            .exclude(status="cancelled")
             .order_by("-created_at")
         )
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        rows = page if page is not None else queryset
+        courses = [e.course for e in rows]
+        serializer = CourseDetailSerializer(courses, many=True, context={"request": request})
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
 
 @extend_schema_view(
@@ -369,29 +396,35 @@ class MyCourseListAPIView(generics.ListAPIView):
     get=extend_schema(
         tags=["Teachers"],
         summary="Мои курсы как преподавателя",
-        description="Возвращает курсы, которые ведет текущий преподаватель.",
+        description=(
+            "Возвращает полные карточки курсов в том же формате, что и GET /api/courses/{id}/ "
+            "(CourseDetailSerializer), для всех курсов текущего преподавателя."
+        ),
         parameters=[
             OpenApiParameter(name="status", description="Статус курса", type=str),
         ],
+        responses=CourseDetailSerializer(many=True),
     )
 )
 class MyTeachingCourseListAPIView(generics.ListAPIView):
-    serializer_class = TeachingCourseSerializer
+    serializer_class = CourseDetailSerializer
     permission_classes = [permissions.IsAuthenticated]
     authentication_classes = [JWTAuthentication, SessionAuthentication]
 
     def get_queryset(self):
         queryset = (
-            Course.objects.select_related("dance_style", "studio")
-            .filter(teacher__user=self.request.user)
-            .annotate(
-                students_count=Count(
-                    "enrollments",
-                    filter=Q(enrollments__status__in=["active", "pending", "completed"]),
-                    distinct=True,
-                ),
-                lessons_count=Count("lessons", distinct=True),
+            Course.objects.select_related(
+                "teacher__user",
+                "dance_style",
+                "studio__city",
+                "hall",
             )
+            .prefetch_related(
+                "images",
+                "schedule_rules__hall",
+                "reviews",
+            )
+            .filter(teacher__user=self.request.user)
             .order_by("date_from", "id")
         )
         status_param = self.request.query_params.get("status")
@@ -528,6 +561,7 @@ class UserSurveyAPIView(APIView):
         tags=["Users"],
         summary="Записаться на курс",
         description="Создает запись текущего пользователя на курс.",
+        responses=CourseDetailSerializer,
     ),
     delete=extend_schema(
         tags=["Users"],
@@ -536,7 +570,7 @@ class UserSurveyAPIView(APIView):
     ),
 )
 class CourseEnrollAPIView(APIView):
-    serializer_class = EnrollmentSerializer
+    serializer_class = CourseDetailSerializer
     permission_classes = [permissions.IsAuthenticated]
     authentication_classes = [JWTAuthentication, SessionAuthentication]
 
@@ -556,9 +590,10 @@ class CourseEnrollAPIView(APIView):
             enrollment.cancelled_at = None
             enrollment.save(update_fields=["status", "cancelled_at", "updated_at"])
 
-        serializer = EnrollmentSerializer(enrollment)
+        enrollment = _enrollment_queryset_with_course_detail().get(pk=enrollment.pk)
+        data = CourseDetailSerializer(enrollment.course, context={"request": request}).data
         return Response(
-            serializer.data,
+            data,
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
 

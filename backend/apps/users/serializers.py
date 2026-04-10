@@ -537,29 +537,6 @@ class FavoriteTeacherSerializer(serializers.ModelSerializer):
         }
 
 
-class EnrollmentSerializer(serializers.ModelSerializer):
-    course = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Enrollment
-        fields = (
-            "id",
-            "course",
-            "enrolled_at",
-            "status",
-            "paid",
-            "cancelled_at",
-        )
-
-    def get_course(self, obj: Enrollment) -> dict:
-        return {
-            "id": obj.course.id,
-            "name": obj.course.name,
-            "level": obj.course.level,
-            "status": obj.course.status,
-        }
-
-
 class MyCourseSerializer(serializers.ModelSerializer):
     course = serializers.SerializerMethodField()
     teacher = serializers.SerializerMethodField()
@@ -599,29 +576,6 @@ class MyCourseSerializer(serializers.ModelSerializer):
             "date_to": obj.course.date_to,
             "status": obj.course.status,
         }
-
-
-class TeachingCourseSerializer(serializers.ModelSerializer):
-    dance_style = serializers.CharField(source="dance_style.name", read_only=True)
-    studio = serializers.CharField(source="studio.name", read_only=True)
-    students_count = serializers.IntegerField(read_only=True)
-    lessons_count = serializers.IntegerField(read_only=True)
-
-    class Meta:
-        model = Course
-        fields = (
-            "id",
-            "name",
-            "level",
-            "price",
-            "date_from",
-            "date_to",
-            "status",
-            "dance_style",
-            "studio",
-            "students_count",
-            "lessons_count",
-        )
 
 
 class TeacherCourseListSerializer(serializers.ModelSerializer):

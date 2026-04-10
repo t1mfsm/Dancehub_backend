@@ -154,6 +154,9 @@ class Course(TimeStampedModel):
         choices=CourseStatus.choices,
         default=CourseStatus.DRAFT,
     )
+    music_artist = models.CharField(max_length=255, blank=True)
+    music_track = models.CharField(max_length=255, blank=True)
+    music_url = models.URLField(blank=True)
     image_cover = models.URLField(blank=True)
 
     class Meta:
@@ -180,22 +183,6 @@ class CourseImage(models.Model):
         verbose_name = "Изображение курса"
         verbose_name_plural = "Изображения курсов"
         ordering = ["sort_order", "id"]
-
-
-class CourseMusic(models.Model):
-    course = models.OneToOneField(
-        Course,
-        on_delete=models.CASCADE,
-        related_name="music",
-    )
-    artist = models.CharField(max_length=255, blank=True)
-    track = models.CharField(max_length=255, blank=True)
-    url = models.URLField(blank=True)
-
-    class Meta:
-        db_table = "course_music"
-        verbose_name = "Музыка курса"
-        verbose_name_plural = "Музыка курсов"
 
 
 class CourseScheduleRule(models.Model):

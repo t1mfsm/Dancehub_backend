@@ -20,7 +20,7 @@ services:
     build:
       context: ./backend
     container_name: dancehub_web
-    command: sh -c "python manage.py migrate && python manage.py populate_cards --clear && python manage.py runserver 0.0.0.0:8000"
+    command: sh -c "python manage.py migrate && python manage.py populate_cards && python manage.py runserver 0.0.0.0:8000"
     volumes:
       - ./backend:/app
       - ../f2e-front/src/assets:/app/frontend_assets:ro

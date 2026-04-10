@@ -2,17 +2,17 @@
 Management command to populate the database with course data from frontend cards.ts.
 """
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from django.core.management.base import BaseCommand
 from django.db import connection
 from django.db import transaction
+from django.utils import timezone
 from django.utils.text import slugify
 
 from apps.courses.models import (
     Course,
     CourseImage,
-    CourseMusic,
     CourseScheduleRule,
     CourseStatus,
     DanceStyle,
@@ -62,10 +62,11 @@ WEEKDAY_MAP = {
 }
 
 
-def parse_short_date(short: str, year: int = 2025) -> datetime:
-    """Parse '17.02' -> date(2025, 2, 17)."""
+def parse_short_date(short: str, year: int | None = None) -> date:
+    """Parse '17.02' -> date (год по умолчанию — текущий календарный год)."""
     day, month = map(int, short.split("."))
-    return datetime(year, month, day).date()
+    y = year if year is not None else timezone.localdate().year
+    return datetime(y, month, day).date()
 
 class Command(BaseCommand):
     help = "Populate database with course data from frontend cards.ts"
@@ -280,6 +281,9 @@ class Command(BaseCommand):
                     "date_from": parse_short_date(card["dateFrom"]),
                     "date_to": parse_short_date(card["dateTo"]),
                     "status": CourseStatus.PUBLISHED,
+                    "music_artist": card["music"]["artist"],
+                    "music_track": card["music"]["track"],
+                    "music_url": card["music"]["url"],
                     "image_cover": COURSE_IMAGES_MAP.get(
                         card["images"][0] if card["images"] else "",
                         "/assets/images/courses/placeholder.jpg",
@@ -291,14 +295,6 @@ class Command(BaseCommand):
             for i, img_key in enumerate(card["images"]):
                 url = COURSE_IMAGES_MAP.get(img_key, f"/assets/images/courses/{img_key}.jpg")
                 CourseImage.objects.create(course=course, image=url, sort_order=i)
-
-            CourseMusic.objects.filter(course=course).delete()
-            CourseMusic.objects.create(
-                course=course,
-                artist=card["music"]["artist"],
-                track=card["music"]["track"],
-                url=card["music"]["url"],
-            )
 
             CourseScheduleRule.objects.filter(course=course).delete()
             if "schedule" in card:
