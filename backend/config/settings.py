@@ -16,7 +16,13 @@ DEBUG = env_bool("DEBUG", default=True)
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="127.0.0.1,localhost,testserver", cast=Csv())
 CORS_ALLOWED_ORIGINS = config(
     "CORS_ALLOWED_ORIGINS",
-    default="http://localhost:8080,http://127.0.0.1:8080",
+    default="http://localhost:8080,http://127.0.0.1:8080,https://localhost:8080,https://127.0.0.1:8080",
+    cast=Csv(),
+)
+# Для SessionAuthentication и небезопасных методов: Origin должен совпадать (в т.ч. https:// при Vite + mkcert).
+CSRF_TRUSTED_ORIGINS = config(
+    "CSRF_TRUSTED_ORIGINS",
+    default="http://localhost:8080,http://127.0.0.1:8080,https://localhost:8080,https://127.0.0.1:8080",
     cast=Csv(),
 )
 
@@ -93,14 +99,20 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+FRONTEND_ASSETS_URL = "/assets/"
+FRONTEND_ASSETS_ROOT = Path("/app/frontend_assets")
+if not FRONTEND_ASSETS_ROOT.exists():
+    FRONTEND_ASSETS_ROOT = BASE_DIR.parent.parent / "f2e-front" / "src" / "assets"
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "users.User"
 
 REST_FRAMEWORK = {
+    # Только JWT: SessionAuthentication требует CSRF для небезопасных методов при cookie-сессии — SPA на JWT этого не шлёт.
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
-        "rest_framework.authentication.SessionAuthentication",
+        "config.authentication.OptionalJWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.AllowAny",

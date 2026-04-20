@@ -1,4 +1,5 @@
-from django.db.models import Count, Q
+from django.db.models import Case, CharField, Count, Q, Value, When
+from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import exceptions, generics, permissions, status
 from rest_framework.authentication import SessionAuthentication
@@ -8,7 +9,8 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from apps.users.models import TeacherProfile
 
-from .models import Attendance, Course, DanceStyle, Enrollment, Lesson, Review, Studio
+from .constants import CourseLifecycleStatus
+from .models import Attendance, Course, CourseStatus, DanceStyle, Enrollment, Lesson, Review, Studio
 from .serializers import (
     AttendanceMarkSerializer,
     AttendanceSerializer,
@@ -115,19 +117,38 @@ class MapPointListAPIView(generics.ListAPIView):
     get=extend_schema(
         tags=["Courses"],
         summary="Список курсов",
-        description="Возвращает список курсов с простой фильтрацией по query params.",
+        description=(
+            "Список курсов. Без query params — опубликованные курсы, по датам ещё не завершённые "
+            "(календарный статус active); в поле status в ответе — active или completed по дате окончания. "
+            "Параметр status=active|completed фильтрует по этому календарному признаку."
+        ),
         parameters=[
             OpenApiParameter(name="city", description="Название города", type=str),
             OpenApiParameter(name="style", description="Slug или название стиля", type=str),
             OpenApiParameter(name="teacher", description="Имя, фамилия или email преподавателя", type=str),
             OpenApiParameter(name="level", description="Уровень: beginner/intermediate/advanced/any", type=str),
             OpenApiParameter(name="studio", description="Название студии", type=str),
-            OpenApiParameter(name="status", description="Статус курса", type=str),
+            OpenApiParameter(
+                name="status",
+                description="Статус в БД (draft/published/…) или active|completed по датам",
+                type=str,
+            ),
         ],
     )
 )
 class CourseListAPIView(generics.ListCreateAPIView):
     permission_classes = [permissions.AllowAny]
+
+    @staticmethod
+    def _with_activity_status(queryset):
+        today = timezone.localdate()
+        return queryset.annotate(
+            activity_status=Case(
+                When(date_to__lt=today, then=Value(CourseLifecycleStatus.COMPLETED)),
+                default=Value(CourseLifecycleStatus.ACTIVE),
+                output_field=CharField(),
+            )
+        )
 
     def get_permissions(self):
         if self.request.method == "POST":
@@ -140,13 +161,14 @@ class CourseListAPIView(generics.ListCreateAPIView):
         return CourseListSerializer
 
     def get_queryset(self):
-        queryset = (
+        queryset = self._with_activity_status(
             Course.objects.select_related(
                 "teacher__user",
                 "dance_style",
                 "studio__city",
                 "hall",
             )
+            .prefetch_related("schedule_rules", "images")
             .all()
             .order_by("date_from", "id")
         )
@@ -180,8 +202,20 @@ class CourseListAPIView(generics.ListCreateAPIView):
         if studio:
             queryset = queryset.filter(studio__name__icontains=studio)
 
-        if status_param:
+        if status_param in {"active", "completed"}:
+            queryset = queryset.filter(activity_status=status_param)
+        elif status_param:
             queryset = queryset.filter(status=status_param)
+        elif teacher:
+            # Витрина по умолчанию — только текущие; для кабинета преподавателя по teacher
+            # нужны и завершённые по дате курсы (иначе в «Мои курсы» не видно прошедших).
+            queryset = queryset.filter(activity_status__in=["active", "completed"])
+        else:
+            # Витрина: только опубликованные и ещё идущие по датам (не завершённые по календарю).
+            queryset = queryset.filter(
+                status=CourseStatus.PUBLISHED,
+                activity_status=CourseLifecycleStatus.ACTIVE,
+            )
 
         return queryset.distinct()
 
@@ -236,7 +270,6 @@ class CourseRetrieveAPIView(generics.RetrieveUpdateDestroyAPIView):
             "dance_style",
             "studio__city",
             "hall",
-            "music",
         ).prefetch_related(
             "images",
             "schedule_rules__hall",
@@ -272,10 +305,10 @@ class CourseRetrieveAPIView(generics.RetrieveUpdateDestroyAPIView):
         teacher_id = serializer.validated_data.pop("teacher_id", None)
         if teacher_id and request.user.is_superuser:
             teacher = generics.get_object_or_404(TeacherProfile, id=teacher_id)
-            serializer.save(teacher=teacher)
+            saved = serializer.save(teacher=teacher)
         else:
-            serializer.save()
-        return Response(CourseDetailSerializer(course, context={"request": request}).data)
+            saved = serializer.save()
+        return Response(CourseDetailSerializer(saved, context={"request": request}).data)
 
     @extend_schema(
         tags=["Courses"],

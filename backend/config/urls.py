@@ -1,3 +1,5 @@
+from django.conf import settings
+from django.conf.urls.static import static
 from django.contrib import admin
 from django.http import JsonResponse
 from django.urls import include, path
@@ -16,3 +18,8 @@ urlpatterns = [
     path('api/', include('apps.courses.urls')),
     path('api/', include('apps.users.urls')),
 ]
+
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    if settings.FRONTEND_ASSETS_ROOT.exists():
+        urlpatterns += static(settings.FRONTEND_ASSETS_URL, document_root=settings.FRONTEND_ASSETS_ROOT)

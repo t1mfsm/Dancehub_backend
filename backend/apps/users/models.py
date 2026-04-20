@@ -42,6 +42,7 @@ class Weekday(models.TextChoices):
 
 class User(AbstractUser):
     email = models.EmailField(unique=True)
+    middle_name = models.CharField(max_length=150, blank=True)
     phone = models.CharField(max_length=32, blank=True)
     avatar = models.URLField(blank=True)
     city = models.ForeignKey(
@@ -80,6 +81,7 @@ class TeacherProfile(TimeStampedModel):
         related_name="teacher_profile",
     )
     bio = models.TextField(blank=True)
+    images = models.JSONField(default=list, blank=True)
     experience_years = models.PositiveIntegerField(default=0)
     rating_avg = models.DecimalField(max_digits=3, decimal_places=2, default=0)
     rating_count = models.PositiveIntegerField(default=0)
@@ -232,4 +234,3 @@ class TeacherReview(TimeStampedModel):
                 name="unique_teacher_review_per_author",
             )
         ]
-

@@ -1,6 +1,24 @@
+import json
+import uuid
+from pathlib import Path
+
+from django.conf import settings
+from django.core.files.storage import default_storage
+from django.utils import timezone
 from rest_framework import serializers
 
-from .models import Attendance, Course, CourseScheduleRule, DanceStyle, Hall, Lesson, Review, Studio
+from .constants import CourseLifecycleStatus
+from .models import Attendance, Course, CourseImage, CourseScheduleRule, DanceStyle, Hall, Lesson, Review, Studio
+
+
+def _build_absolute_url(value: str | None, request) -> str:
+    if not value:
+        return ""
+    if value.startswith(("http://", "https://")):
+        return value
+    if request is None:
+        return value
+    return request.build_absolute_uri(value)
 
 
 class DanceStyleSerializer(serializers.ModelSerializer):
@@ -11,6 +29,7 @@ class DanceStyleSerializer(serializers.ModelSerializer):
 
 class StudioSerializer(serializers.ModelSerializer):
     city = serializers.CharField(source="city.name", read_only=True)
+    image = serializers.SerializerMethodField()
 
     class Meta:
         model = Studio
@@ -24,6 +43,10 @@ class StudioSerializer(serializers.ModelSerializer):
             "lng",
             "image",
         )
+
+    def get_image(self, obj: Studio) -> str:
+        request = self.context.get("request")
+        return _build_absolute_url(obj.image, request)
 
 
 class HallShortSerializer(serializers.Serializer):
@@ -80,6 +103,18 @@ class MapPointSerializer(serializers.ModelSerializer):
         return list(styles)
 
 
+WEEKDAY_TO_RU = {
+    "mon": "Пн",
+    "tue": "Вт",
+    "wed": "Ср",
+    "thu": "Чт",
+    "fri": "Пт",
+    "sat": "Сб",
+    "sun": "Вс",
+}
+WEEKDAY_ORDER = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
 class CourseScheduleRuleSerializer(serializers.ModelSerializer):
     hall = serializers.CharField(source="hall.name", read_only=True)
 
@@ -95,17 +130,117 @@ class CourseScheduleRuleSerializer(serializers.ModelSerializer):
         )
 
 
+def _format_schedule(course: Course, include_location: bool = False) -> list[dict]:
+    """Формат расписания для списка и детальной карточки курса."""
+    rules = list(course.schedule_rules.order_by("time_from", "weekday"))
+    if not rules:
+        return []
+
+    grouped: dict[tuple, list[str]] = {}
+    for r in rules:
+        key = (r.time_from.strftime("%H:%M"), r.time_to.strftime("%H:%M"), r.location_text or "")
+        if key not in grouped:
+            grouped[key] = []
+        grouped[key].append(r.weekday)
+
+    result = []
+    for (time_from, time_to, location), weekdays in grouped.items():
+        sorted_ru = [
+            WEEKDAY_TO_RU[w]
+            for w in sorted(weekdays, key=lambda x: WEEKDAY_ORDER.index(x) if x in WEEKDAY_ORDER else 99)
+        ]
+        item = {
+            "weekday": ", ".join(sorted_ru),
+            "time_from": time_from,
+            "time_to": time_to,
+        }
+        if include_location:
+            item["location"] = location or None
+
+        result.append(item)
+    return result
+
+
+def _get_images_list(course: Course, request=None) -> list[str]:
+    """Массив URL изображений (формат cards.ts: images: string[])."""
+    imgs = list(course.images.all().order_by("sort_order", "id"))
+    if imgs:
+        return [_build_absolute_url(img.image, request) for img in imgs]
+    if course.image_cover:
+        return [_build_absolute_url(course.image_cover, request)]
+    return []
+
+
 class CourseListSerializer(serializers.ModelSerializer):
+    status = serializers.SerializerMethodField()
     teacher_id = serializers.IntegerField(source="teacher.id", read_only=True)
     teacher_name = serializers.SerializerMethodField()
     dance_style = serializers.CharField(source="dance_style.name", read_only=True)
-    dance_style_slug = serializers.CharField(source="dance_style.slug", read_only=True)
-    city = serializers.CharField(source="studio.city.name", read_only=True)
-    studio = serializers.CharField(source="studio.name", read_only=True)
-    hall = serializers.CharField(source="hall.name", read_only=True)
+    city = serializers.SerializerMethodField()
+    studio = serializers.SerializerMethodField()
+    schedule = serializers.SerializerMethodField()
+    image = serializers.SerializerMethodField()
+    spots_left = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
+        fields = (
+            "id",
+            "name",
+            "level",
+            "price",
+            "date_from",
+            "date_to",
+            "status",
+            "image",
+            "teacher_id",
+            "teacher_name",
+            "dance_style",
+            "city",
+            "studio",
+            "schedule",
+            "spots_left",
+        )
+
+    def get_city(self, obj: Course) -> str:
+        return obj.studio.city.name if obj.studio and obj.studio.city else ""
+
+    def get_studio(self, obj: Course) -> str:
+        return obj.studio.name if obj.studio else ""
+
+    def get_schedule(self, obj: Course) -> list[dict]:
+        return _format_schedule(obj)
+
+    def get_image(self, obj: Course) -> str:
+        request = self.context.get("request")
+        images = _get_images_list(obj, request)
+        return images[0] if images else ""
+
+    def get_teacher_name(self, obj: Course) -> str:
+        return obj.teacher.user.get_full_name() or obj.teacher.user.email
+
+    def get_spots_left(self, obj: Course) -> int:
+        active = obj.enrollments.filter(status="active").count()
+        return max(0, obj.capacity - active)
+
+    def get_status(self, obj: Course) -> str:
+        """Витрина: только active | completed по date_to (см. CourseLifecycleStatus)."""
+        if hasattr(obj, "activity_status"):
+            return obj.activity_status
+        today = timezone.localdate()
+        return (
+            CourseLifecycleStatus.COMPLETED
+            if obj.date_to < today
+            else CourseLifecycleStatus.ACTIVE
+        )
+
+
+class CourseDetailSerializer(CourseListSerializer):
+    music = serializers.SerializerMethodField()
+    images = serializers.SerializerMethodField()
+    schedule = serializers.SerializerMethodField()
+
+    class Meta(CourseListSerializer.Meta):
         fields = (
             "id",
             "name",
@@ -113,58 +248,34 @@ class CourseListSerializer(serializers.ModelSerializer):
             "level",
             "price",
             "capacity",
+            "spots_left",
             "date_from",
             "date_to",
             "status",
-            "image_cover",
+            "images",
             "teacher_id",
             "teacher_name",
             "dance_style",
-            "dance_style_slug",
             "city",
             "studio",
-            "hall",
-        )
-
-    def get_teacher_name(self, obj: Course) -> str:
-        return obj.teacher.user.get_full_name() or obj.teacher.user.email
-
-
-class CourseDetailSerializer(CourseListSerializer):
-    music = serializers.SerializerMethodField()
-    images = serializers.SerializerMethodField()
-    schedule_rules = CourseScheduleRuleSerializer(many=True, read_only=True)
-    studio_data = StudioSerializer(source="studio", read_only=True)
-    reviews_count = serializers.IntegerField(source="reviews.count", read_only=True)
-
-    class Meta(CourseListSerializer.Meta):
-        fields = CourseListSerializer.Meta.fields + (
+            "schedule",
             "music",
-            "images",
-            "schedule_rules",
-            "studio_data",
-            "reviews_count",
         )
 
-    def get_music(self, obj: Course) -> dict | None:
-        if not hasattr(obj, "music"):
-            return None
+    def get_schedule(self, obj: Course) -> list[dict]:
+        return _format_schedule(obj, include_location=True)
 
+    def get_music(self, obj: Course) -> dict:
         return {
-            "artist": obj.music.artist,
-            "track": obj.music.track,
-            "url": obj.music.url,
+            "artist": obj.music_artist or "",
+            "track": obj.music_track or "",
+            "url": obj.music_url or "",
         }
 
-    def get_images(self, obj: Course) -> list[dict]:
-        return [
-            {
-                "id": image.id,
-                "image": image.image,
-                "sort_order": image.sort_order,
-            }
-            for image in obj.images.all()
-        ]
+    def get_images(self, obj: Course) -> list[str]:
+        request = self.context.get("request")
+        return _get_images_list(obj, request)
+
 
 
 class LessonSerializer(serializers.ModelSerializer):
@@ -297,8 +408,30 @@ class CourseReviewSerializer(serializers.ModelSerializer):
         return obj.author_user.get_full_name() or obj.author_user.email
 
 
+class CourseScheduleRuleWriteSerializer(serializers.Serializer):
+    weekday = serializers.ChoiceField(choices=CourseScheduleRule._meta.get_field("weekday").choices)
+    time_from = serializers.TimeField()
+    time_to = serializers.TimeField()
+    hall_id = serializers.PrimaryKeyRelatedField(
+        source="hall",
+        queryset=Hall.objects.all(),
+        allow_null=True,
+        required=False,
+    )
+    location_text = serializers.CharField(required=False, allow_blank=True)
+
+
 class CourseWriteSerializer(serializers.ModelSerializer):
     teacher_id = serializers.IntegerField(write_only=True, required=False)
+    image_file = serializers.FileField(write_only=True, required=False)
+    image_files = serializers.ListField(
+        child=serializers.FileField(),
+        write_only=True,
+        required=False,
+    )
+    music_artist = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    music_track = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    music_url = serializers.URLField(write_only=True, required=False, allow_blank=True)
     dance_style_id = serializers.PrimaryKeyRelatedField(
         source="dance_style",
         queryset=DanceStyle.objects.all(),
@@ -313,6 +446,12 @@ class CourseWriteSerializer(serializers.ModelSerializer):
         source="hall",
         queryset=Hall.objects.all(),
         allow_null=True,
+        required=False,
+    )
+    schedule = CourseScheduleRuleWriteSerializer(many=True, required=False)
+    ordered_image_urls = serializers.ListField(
+        child=serializers.URLField(),
+        write_only=True,
         required=False,
     )
 
@@ -332,7 +471,160 @@ class CourseWriteSerializer(serializers.ModelSerializer):
             "date_to",
             "status",
             "image_cover",
+            "image_file",
+            "image_files",
+            "ordered_image_urls",
+            "music_artist",
+            "music_track",
+            "music_url",
+            "schedule",
         )
+        extra_kwargs = {
+            "image_cover": {
+                "required": False,
+                "allow_null": True,
+                "allow_blank": True,
+            }
+        }
+
+    def to_internal_value(self, data):
+        mutable_data = data.copy()
+        schedule = mutable_data.get("schedule")
+
+        if isinstance(schedule, str):
+            mutable_data["schedule"] = json.loads(schedule)
+
+        request = self.context.get("request")
+        if request is not None:
+            uploaded_images = request.FILES.getlist("image_files")
+            if uploaded_images:
+                mutable_data.setlist("image_files", uploaded_images)
+
+        return super().to_internal_value(mutable_data)
+
+    def create(self, validated_data):
+        image_file = validated_data.pop("image_file", None)
+        image_files = validated_data.pop("image_files", [])
+        validated_data.pop("ordered_image_urls", None)
+        schedule_data = validated_data.pop("schedule", [])
+        self._apply_uploaded_image(validated_data, image_file)
+        if validated_data.get("image_cover") is None:
+            validated_data["image_cover"] = ""
+        course = super().create(validated_data)
+        self._save_uploaded_images(course, image_files)
+        self._save_schedule(course, schedule_data)
+        return course
+
+    def update(self, instance, validated_data):
+        image_file = validated_data.pop("image_file", None)
+        image_files = validated_data.pop("image_files", [])
+        ordered_image_urls = validated_data.pop("ordered_image_urls", None)
+        schedule_data = validated_data.pop("schedule", None)
+        self._apply_uploaded_image(validated_data, image_file)
+        if validated_data.get("image_cover") is None:
+            validated_data["image_cover"] = ""
+        course = super().update(instance, validated_data)
+        if image_files:
+            self._save_uploaded_images(course, image_files, replace_existing=True)
+        elif ordered_image_urls:
+            self._apply_ordered_gallery_urls(course, ordered_image_urls)
+        if schedule_data is not None:
+            self._save_schedule(course, schedule_data)
+        return course
+
+    def _save_schedule(self, course: Course, schedule_data: list[dict]) -> None:
+        course.schedule_rules.all().delete()
+        if not schedule_data:
+            return
+
+        CourseScheduleRule.objects.bulk_create(
+            [
+                CourseScheduleRule(
+                    course=course,
+                    weekday=item["weekday"],
+                    time_from=item["time_from"],
+                    time_to=item["time_to"],
+                    hall=item.get("hall"),
+                    location_text=item.get("location_text", ""),
+                )
+                for item in schedule_data
+            ]
+        )
+
+    @staticmethod
+    def _urls_equal_for_gallery(stored: str, client: str) -> bool:
+        a = (stored or "").strip().rstrip("/")
+        b = (client or "").strip().rstrip("/")
+        if a == b:
+            return True
+        return Path(a).name == Path(b).name
+
+    def _apply_ordered_gallery_urls(self, course: Course, urls: list[str]) -> None:
+        if not urls:
+            return
+
+        remaining = list(course.images.all())
+        for index, url in enumerate(urls):
+            match = None
+            for ci in remaining:
+                if self._urls_equal_for_gallery(ci.image, url):
+                    match = ci
+                    break
+            if match is None:
+                continue
+            if match.sort_order != index:
+                match.sort_order = index
+                match.save(update_fields=["sort_order"])
+            remaining.remove(match)
+
+        course.image_cover = urls[0]
+        course.save(update_fields=["image_cover"])
+
+    def _save_uploaded_images(
+        self,
+        course: Course,
+        image_files: list,
+        replace_existing: bool = False,
+    ) -> None:
+        if not image_files:
+            return
+
+        if replace_existing:
+            course.images.all().delete()
+
+        image_urls = [self._store_uploaded_file(image_file) for image_file in image_files]
+
+        CourseImage.objects.bulk_create(
+            [
+                CourseImage(
+                    course=course,
+                    image=image_url,
+                    sort_order=index,
+                )
+                for index, image_url in enumerate(image_urls)
+            ]
+        )
+
+        course.image_cover = image_urls[0]
+        course.save(update_fields=["image_cover"])
+
+    def _apply_uploaded_image(self, validated_data: dict, image_file) -> None:
+        if not image_file:
+            return
+
+        validated_data["image_cover"] = self._store_uploaded_file(image_file)
+
+    def _store_uploaded_file(self, image_file) -> str:
+        extension = Path(image_file.name).suffix or ".jpg"
+        filename = f"courses/{uuid.uuid4().hex}{extension}"
+        stored_path = default_storage.save(filename, image_file)
+        media_url = f"{settings.MEDIA_URL}{stored_path}".replace("//", "/")
+        request = self.context.get("request")
+
+        if request is not None:
+            return request.build_absolute_uri(media_url)
+
+        return media_url
 
 
 class LessonWriteSerializer(serializers.ModelSerializer):

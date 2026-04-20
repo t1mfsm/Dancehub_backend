@@ -4,7 +4,6 @@ from .models import (
     Attendance,
     Course,
     CourseImage,
-    CourseMusic,
     CourseScheduleRule,
     DanceStyle,
     Enrollment,
@@ -44,7 +43,7 @@ class TeacherSpecializationAdmin(admin.ModelAdmin):
 
 @admin.register(Course)
 class CourseAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "teacher", "dance_style", "studio", "level", "status")
+    list_display = ("id", "name", "teacher", "dance_style", "studio", "level", "status", "music_url")
     list_filter = ("status", "level", "dance_style", "studio")
     search_fields = ("name", "teacher__user__email", "teacher__user__first_name", "teacher__user__last_name")
 
@@ -52,11 +51,6 @@ class CourseAdmin(admin.ModelAdmin):
 @admin.register(CourseImage)
 class CourseImageAdmin(admin.ModelAdmin):
     list_display = ("id", "course", "sort_order")
-
-
-@admin.register(CourseMusic)
-class CourseMusicAdmin(admin.ModelAdmin):
-    list_display = ("id", "course", "artist", "track")
 
 
 @admin.register(CourseScheduleRule)
