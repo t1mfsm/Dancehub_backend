@@ -1,7 +1,6 @@
 import uuid
 from pathlib import Path
 
-from django.conf import settings
 from django.core.files.storage import default_storage
 from django.contrib.auth import authenticate
 from rest_framework import serializers
@@ -372,13 +371,13 @@ class MeUpdateSerializer(serializers.ModelSerializer):
             extension = Path(avatar_file.name).suffix or ".jpg"
             filename = f"avatars/{uuid.uuid4().hex}{extension}"
             stored_path = default_storage.save(filename, avatar_file)
-            media_url = f"{settings.MEDIA_URL}{stored_path}".replace("//", "/")
+            url = default_storage.url(stored_path)
             request = self.context.get("request")
 
-            if request is not None:
-                instance.avatar = request.build_absolute_uri(media_url)
-            else:
-                instance.avatar = media_url
+            if not url.startswith(("http://", "https://")) and request is not None:
+                url = request.build_absolute_uri(url)
+
+            instance.avatar = url
 
         instance.save()
         return instance

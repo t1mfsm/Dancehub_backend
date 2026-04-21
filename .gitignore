@@ -6,3 +6,5 @@ __pycache__/
 backend/staticfiles/
 backend/media/
 postgres_data/
+.claude/
+skills.md
