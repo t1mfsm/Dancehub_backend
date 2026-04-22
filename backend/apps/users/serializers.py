@@ -173,10 +173,15 @@ class TeacherProfileUpdateSerializer(serializers.Serializer):
 
 
 class MeSerializer(serializers.ModelSerializer):
-    city = serializers.CharField(source="city.name", read_only=True)
+    firstName = serializers.CharField(source="first_name", read_only=True)
+    lastName = serializers.CharField(source="last_name", read_only=True)
+    city = serializers.CharField(source="city.name", read_only=True, default="")
+    level = serializers.CharField(source="dance_level", read_only=True)
+    registeredAt = serializers.DateTimeField(source="date_joined", read_only=True)
+    surveyCompleted = serializers.BooleanField(source="survey_completed", read_only=True)
     teacher = serializers.SerializerMethodField()
-    favorite_course_ids = serializers.SerializerMethodField()
-    favorite_teacher_ids = serializers.SerializerMethodField()
+    favoriteCourseIds = serializers.SerializerMethodField()
+    favoriteTeacherIds = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -184,24 +189,25 @@ class MeSerializer(serializers.ModelSerializer):
             "id",
             "email",
             "username",
-            "first_name",
-            "last_name",
+            "firstName",
+            "lastName",
             "phone",
             "avatar",
             "city",
-            "dance_level",
+            "level",
             "role",
-            "survey_completed",
+            "registeredAt",
+            "surveyCompleted",
             "flags",
             "teacher",
-            "favorite_course_ids",
-            "favorite_teacher_ids",
+            "favoriteCourseIds",
+            "favoriteTeacherIds",
         )
 
-    def get_favorite_course_ids(self, obj: User) -> list[int]:
+    def get_favoriteCourseIds(self, obj: User) -> list[int]:
         return list(obj.favorite_courses.values_list("course_id", flat=True))
 
-    def get_favorite_teacher_ids(self, obj: User) -> list[int]:
+    def get_favoriteTeacherIds(self, obj: User) -> list[int]:
         return list(obj.favorite_teachers.values_list("teacher_id", flat=True))
 
     def get_teacher(self, obj: User) -> dict | None:
@@ -364,31 +370,30 @@ class LogoutSerializer(serializers.Serializer):
     refresh = serializers.CharField()
 
 
-class RegisterSerializer(serializers.ModelSerializer):
+class RegisterSerializer(serializers.Serializer):
+    email = serializers.EmailField()
     password = serializers.CharField(write_only=True, min_length=8)
-    password_confirm = serializers.CharField(write_only=True, min_length=8)
+    firstName = serializers.CharField(required=False, allow_blank=True, default="")
+    lastName = serializers.CharField(required=False, allow_blank=True, default="")
+    phone = serializers.CharField(required=False, allow_blank=True, default="")
+    role = serializers.ChoiceField(choices=UserRole.choices, required=False, default=UserRole.STUDENT)
 
-    class Meta:
-        model = User
-        fields = (
-            "email",
-            "username",
-            "first_name",
-            "last_name",
-            "phone",
-            "password",
-            "password_confirm",
-        )
-
-    def validate(self, attrs):
-        if attrs["password"] != attrs["password_confirm"]:
-            raise serializers.ValidationError({"password_confirm": "Пароли не совпадают."})
-        return attrs
+    def validate_email(self, value: str) -> str:
+        if User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError("Пользователь с таким email уже существует.")
+        return value
 
     def create(self, validated_data):
-        validated_data.pop("password_confirm")
-        password = validated_data.pop("password")
-        user = User(**validated_data)
+        email = validated_data["email"]
+        password = validated_data["password"]
+        user = User(
+            email=email,
+            username=email,
+            first_name=validated_data.get("firstName", ""),
+            last_name=validated_data.get("lastName", ""),
+            phone=validated_data.get("phone", ""),
+            role=validated_data.get("role", UserRole.STUDENT),
+        )
         user.set_password(password)
         user.save()
         return user

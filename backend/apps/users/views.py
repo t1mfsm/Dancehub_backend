@@ -464,11 +464,13 @@ class RegisterAPIView(APIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         refresh = RefreshToken.for_user(user)
+        access = str(refresh.access_token)
         return Response(
             {
-                "user": MeSerializer(user).data,
+                "user": MeSerializer(user, context={"request": request}).data,
+                "token": access,
+                "access": access,
                 "refresh": str(refresh),
-                "access": str(refresh.access_token),
             },
             status=status.HTTP_201_CREATED,
         )
@@ -489,11 +491,13 @@ class LoginAPIView(APIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.validated_data["user"]
         refresh = RefreshToken.for_user(user)
+        access = str(refresh.access_token)
         return Response(
             {
-                "user": MeSerializer(user).data,
+                "user": MeSerializer(user, context={"request": request}).data,
+                "token": access,
+                "access": access,
                 "refresh": str(refresh),
-                "access": str(refresh.access_token),
             }
         )
 
