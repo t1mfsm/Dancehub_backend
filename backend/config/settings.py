@@ -152,6 +152,8 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.AllowAny",
     ],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_PAGINATION_CLASS": "config.pagination.CustomPagination",
+    "PAGE_SIZE": 9,
     # Глобальный snake_case <-> camelCase для JSON: ответы и multipart тоже camelCase.
     "DEFAULT_RENDERER_CLASSES": (
         "djangorestframework_camel_case.render.CamelCaseJSONRenderer",
