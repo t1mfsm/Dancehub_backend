@@ -173,15 +173,12 @@ class TeacherProfileUpdateSerializer(serializers.Serializer):
 
 
 class MeSerializer(serializers.ModelSerializer):
-    firstName = serializers.CharField(source="first_name", read_only=True)
-    lastName = serializers.CharField(source="last_name", read_only=True)
     city = serializers.CharField(source="city.name", read_only=True, default="")
     level = serializers.CharField(source="dance_level", read_only=True)
-    registeredAt = serializers.DateTimeField(source="date_joined", read_only=True)
-    surveyCompleted = serializers.BooleanField(source="survey_completed", read_only=True)
+    registered_at = serializers.DateTimeField(source="date_joined", read_only=True)
     teacher = serializers.SerializerMethodField()
-    favoriteCourseIds = serializers.SerializerMethodField()
-    favoriteTeacherIds = serializers.SerializerMethodField()
+    favorite_course_ids = serializers.SerializerMethodField()
+    favorite_teacher_ids = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -189,25 +186,25 @@ class MeSerializer(serializers.ModelSerializer):
             "id",
             "email",
             "username",
-            "firstName",
-            "lastName",
+            "first_name",
+            "last_name",
             "phone",
             "avatar",
             "city",
             "level",
             "role",
-            "registeredAt",
-            "surveyCompleted",
+            "registered_at",
+            "survey_completed",
             "flags",
             "teacher",
-            "favoriteCourseIds",
-            "favoriteTeacherIds",
+            "favorite_course_ids",
+            "favorite_teacher_ids",
         )
 
-    def get_favoriteCourseIds(self, obj: User) -> list[int]:
+    def get_favorite_course_ids(self, obj: User) -> list[int]:
         return list(obj.favorite_courses.values_list("course_id", flat=True))
 
-    def get_favoriteTeacherIds(self, obj: User) -> list[int]:
+    def get_favorite_teacher_ids(self, obj: User) -> list[int]:
         return list(obj.favorite_teachers.values_list("teacher_id", flat=True))
 
     def get_teacher(self, obj: User) -> dict | None:
@@ -373,8 +370,8 @@ class LogoutSerializer(serializers.Serializer):
 class RegisterSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True, min_length=8)
-    firstName = serializers.CharField(required=False, allow_blank=True, default="")
-    lastName = serializers.CharField(required=False, allow_blank=True, default="")
+    first_name = serializers.CharField(required=False, allow_blank=True, default="")
+    last_name = serializers.CharField(required=False, allow_blank=True, default="")
     phone = serializers.CharField(required=False, allow_blank=True, default="")
     role = serializers.ChoiceField(choices=UserRole.choices, required=False, default=UserRole.STUDENT)
 
@@ -389,8 +386,8 @@ class RegisterSerializer(serializers.Serializer):
         user = User(
             email=email,
             username=email,
-            first_name=validated_data.get("firstName", ""),
-            last_name=validated_data.get("lastName", ""),
+            first_name=validated_data.get("first_name", ""),
+            last_name=validated_data.get("last_name", ""),
             phone=validated_data.get("phone", ""),
             role=validated_data.get("role", UserRole.STUDENT),
         )
