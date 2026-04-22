@@ -10,13 +10,11 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from apps.users.models import TeacherProfile
 
 from .constants import CourseLifecycleStatus
-from .models import Attendance, Course, CourseStatus, DanceStyle, Enrollment, Lesson, Review, Studio
+from .models import Attendance, Course, CourseStatus, DanceStyle, Enrollment, Lesson, Studio
 from .serializers import (
     AttendanceMarkSerializer,
     AttendanceSerializer,
     CalendarEventSerializer,
-    CourseReviewCreateSerializer,
-    CourseReviewSerializer,
     CourseStudentSerializer,
     CourseDetailSerializer,
     CourseListSerializer,
@@ -58,7 +56,7 @@ class StudioListAPIView(generics.ListAPIView):
     get=extend_schema(
         tags=["Reference"],
         summary="Детальная информация о студии",
-        description="Возвращает студию с залами и количеством курсов.",
+        description="Возвращает студию и количество курсов.",
     )
 )
 class StudioRetrieveAPIView(generics.RetrieveAPIView):
@@ -66,7 +64,7 @@ class StudioRetrieveAPIView(generics.RetrieveAPIView):
     lookup_field = "id"
 
     def get_queryset(self):
-        return Studio.objects.select_related("city").prefetch_related("halls").annotate(
+        return Studio.objects.select_related("city").annotate(
             courses_count=Count("courses", distinct=True)
         )
 
@@ -89,7 +87,6 @@ class MapPointListAPIView(generics.ListAPIView):
 
     def get_queryset(self):
         queryset = Studio.objects.select_related("city").annotate(
-            halls_count=Count("halls", distinct=True),
             active_courses_count=Count("courses", filter=Q(courses__status="published"), distinct=True),
         )
 
@@ -126,7 +123,7 @@ class MapPointListAPIView(generics.ListAPIView):
             OpenApiParameter(name="city", description="Название города", type=str),
             OpenApiParameter(name="style", description="Slug или название стиля", type=str),
             OpenApiParameter(name="teacher", description="Имя, фамилия или email преподавателя", type=str),
-            OpenApiParameter(name="level", description="Уровень: beginner/intermediate/advanced/any", type=str),
+            OpenApiParameter(name="level", description="Уровень (русская строка)", type=str),
             OpenApiParameter(name="studio", description="Название студии", type=str),
             OpenApiParameter(
                 name="status",
@@ -166,7 +163,6 @@ class CourseListAPIView(generics.ListCreateAPIView):
                 "teacher__user",
                 "dance_style",
                 "studio__city",
-                "hall",
             )
             .prefetch_related("schedule_rules", "images")
             .all()
@@ -207,11 +203,8 @@ class CourseListAPIView(generics.ListCreateAPIView):
         elif status_param:
             queryset = queryset.filter(status=status_param)
         elif teacher:
-            # Витрина по умолчанию — только текущие; для кабинета преподавателя по teacher
-            # нужны и завершённые по дате курсы (иначе в «Мои курсы» не видно прошедших).
             queryset = queryset.filter(activity_status__in=["active", "completed"])
         else:
-            # Витрина: только опубликованные и ещё идущие по датам (не завершённые по календарю).
             queryset = queryset.filter(
                 status=CourseStatus.PUBLISHED,
                 activity_status=CourseLifecycleStatus.ACTIVE,
@@ -269,11 +262,9 @@ class CourseRetrieveAPIView(generics.RetrieveUpdateDestroyAPIView):
             "teacher__user",
             "dance_style",
             "studio__city",
-            "hall",
         ).prefetch_related(
             "images",
-            "schedule_rules__hall",
-            "reviews",
+            "schedule_rules",
         )
 
     @extend_schema(
@@ -377,55 +368,6 @@ class CalendarAPIView(generics.ListAPIView):
 
 
 @extend_schema_view(
-    get=extend_schema(
-        tags=["Lessons"],
-        summary="Занятия курса",
-        description="Возвращает список занятий выбранного курса.",
-        parameters=[
-            OpenApiParameter(name="status", description="Фильтр по статусу занятия", type=str),
-        ],
-    )
-)
-class CourseLessonListAPIView(generics.ListCreateAPIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def get_serializer_class(self):
-        if self.request.method == "POST":
-            return LessonWriteSerializer
-        return LessonSerializer
-
-    def get_queryset(self):
-        queryset = Lesson.objects.select_related(
-            "course__teacher__user",
-            "course__studio__city",
-            "hall",
-        ).filter(course_id=self.kwargs["id"])
-
-        status_param = self.request.query_params.get("status")
-        if status_param:
-            queryset = queryset.filter(status=status_param)
-
-        return queryset.order_by("lesson_date", "time_from")
-
-    @extend_schema(
-        tags=["Lessons"],
-        summary="Создать занятие курса",
-        description="Создает новое занятие для курса. Доступно преподавателю курса или администратору.",
-        request=LessonWriteSerializer,
-        responses=LessonSerializer,
-    )
-    def post(self, request, *args, **kwargs):
-        course = generics.get_object_or_404(Course, id=self.kwargs["id"])
-        if not (request.user.is_superuser or course.teacher.user_id == request.user.id):
-            raise exceptions.PermissionDenied("Создавать занятия может только преподаватель курса.")
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        lesson = serializer.save(course=course)
-        return Response(LessonSerializer(lesson).data, status=status.HTTP_201_CREATED)
-
-
-@extend_schema_view(
     patch=extend_schema(
         tags=["Lessons"],
         summary="Обновить занятие",
@@ -447,7 +389,7 @@ class CourseLessonListAPIView(generics.ListCreateAPIView):
     ),
 )
 class LessonRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = Lesson.objects.select_related("course__teacher__user", "hall")
+    queryset = Lesson.objects.select_related("course__teacher__user")
     lookup_field = "lesson_id"
     permission_classes = [permissions.IsAuthenticated]
     authentication_classes = [JWTAuthentication, SessionAuthentication]
@@ -577,54 +519,6 @@ class AttendanceMarkAPIView(APIView):
         attendance, _ = Attendance.objects.update_or_create(
             lesson=lesson,
             student_id=serializer.validated_data["student_id"],
-            defaults={"status": serializer.validated_data["status"]},
+            defaults={"present": serializer.validated_data["present"]},
         )
         return Response(AttendanceSerializer(attendance).data, status=status.HTTP_200_OK)
-
-
-@extend_schema_view(
-    get=extend_schema(
-        tags=["Reviews"],
-        summary="Список отзывов о курсе",
-        description="Возвращает все отзывы выбранного курса.",
-        responses=CourseReviewSerializer(many=True),
-    ),
-    post=extend_schema(
-        tags=["Reviews"],
-        summary="Оставить отзыв о курсе",
-        description="Создает или обновляет отзыв текущего пользователя о курсе.",
-        request=CourseReviewCreateSerializer,
-    ),
-)
-class CourseReviewCreateAPIView(APIView):
-    serializer_class = CourseReviewCreateSerializer
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def get_permissions(self):
-        if self.request.method == "GET":
-            return [permissions.AllowAny()]
-        return [permissions.IsAuthenticated()]
-
-    def get(self, request, course_id: int):
-        reviews = Review.objects.select_related("author_user").filter(course_id=course_id).order_by("-created_at")
-        return Response(CourseReviewSerializer(reviews, many=True).data)
-
-    def post(self, request, course_id: int):
-        course = generics.get_object_or_404(Course, id=course_id)
-        serializer = CourseReviewCreateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        review, _ = Review.objects.update_or_create(
-            author_user=request.user,
-            course=course,
-            defaults=serializer.validated_data,
-        )
-        return Response(
-            {
-                "id": review.id,
-                "course_id": course.id,
-                "rating": review.rating,
-                "text": review.text,
-                "created_at": review.created_at,
-            },
-            status=status.HTTP_200_OK,
-        )

@@ -1,6 +1,6 @@
 from django.db import models
 
-from apps.users.models import AttendanceStatus, DanceLevel, Weekday
+from apps.users.models import DanceLevel, Weekday
 
 
 class TimeStampedModel(models.Model):
@@ -68,54 +68,6 @@ class Studio(TimeStampedModel):
         return self.name
 
 
-class Hall(models.Model):
-    studio = models.ForeignKey(
-        Studio,
-        on_delete=models.CASCADE,
-        related_name="halls",
-    )
-    name = models.CharField(max_length=128)
-    capacity = models.PositiveIntegerField(null=True, blank=True)
-
-    class Meta:
-        db_table = "halls"
-        verbose_name = "Зал"
-        verbose_name_plural = "Залы"
-        constraints = [
-            models.UniqueConstraint(
-                fields=["studio", "name"],
-                name="unique_hall_name_per_studio",
-            )
-        ]
-
-    def __str__(self) -> str:
-        return f"{self.studio.name} / {self.name}"
-
-
-class TeacherSpecialization(models.Model):
-    teacher = models.ForeignKey(
-        "users.TeacherProfile",
-        on_delete=models.CASCADE,
-        related_name="specializations",
-    )
-    dance_style = models.ForeignKey(
-        DanceStyle,
-        on_delete=models.CASCADE,
-        related_name="teacher_specializations",
-    )
-
-    class Meta:
-        db_table = "teacher_specializations"
-        verbose_name = "Специализация преподавателя"
-        verbose_name_plural = "Специализации преподавателей"
-        constraints = [
-            models.UniqueConstraint(
-                fields=["teacher", "dance_style"],
-                name="unique_teacher_specialization",
-            )
-        ]
-
-
 class Course(TimeStampedModel):
     teacher = models.ForeignKey(
         "users.TeacherProfile",
@@ -134,16 +86,9 @@ class Course(TimeStampedModel):
         blank=True,
         related_name="courses",
     )
-    hall = models.ForeignKey(
-        Hall,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="courses",
-    )
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True)
-    level = models.CharField(max_length=16, choices=DanceLevel.choices)
+    level = models.CharField(max_length=32, choices=DanceLevel.choices)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     capacity = models.PositiveIntegerField()
     spots_left = models.PositiveIntegerField(null=True, blank=True)
@@ -194,13 +139,6 @@ class CourseScheduleRule(models.Model):
     weekday = models.CharField(max_length=3, choices=Weekday.choices)
     time_from = models.TimeField()
     time_to = models.TimeField()
-    hall = models.ForeignKey(
-        Hall,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="schedule_rules",
-    )
     location_text = models.CharField(max_length=255, blank=True)
 
     class Meta:
@@ -217,13 +155,6 @@ class Lesson(TimeStampedModel):
     )
     schedule_rule = models.ForeignKey(
         CourseScheduleRule,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="lessons",
-    )
-    hall = models.ForeignKey(
-        Hall,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -289,7 +220,7 @@ class Attendance(models.Model):
         on_delete=models.CASCADE,
         related_name="attendance_records",
     )
-    status = models.CharField(max_length=16, choices=AttendanceStatus.choices)
+    present = models.BooleanField(default=False)
     marked_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -300,32 +231,6 @@ class Attendance(models.Model):
             models.UniqueConstraint(
                 fields=["lesson", "student"],
                 name="unique_attendance_per_lesson_and_student",
-            )
-        ]
-
-
-class Review(TimeStampedModel):
-    author_user = models.ForeignKey(
-        "users.User",
-        on_delete=models.CASCADE,
-        related_name="course_reviews_left",
-    )
-    course = models.ForeignKey(
-        Course,
-        on_delete=models.CASCADE,
-        related_name="reviews",
-    )
-    rating = models.PositiveSmallIntegerField()
-    text = models.TextField(blank=True)
-
-    class Meta:
-        db_table = "reviews"
-        verbose_name = "Отзыв"
-        verbose_name_plural = "Отзывы"
-        constraints = [
-            models.UniqueConstraint(
-                fields=["author_user", "course"],
-                name="unique_course_review_per_author",
             )
         ]
 
@@ -351,29 +256,5 @@ class FavoriteCourse(models.Model):
             models.UniqueConstraint(
                 fields=["user", "course"],
                 name="unique_favorite_course",
-            )
-        ]
-
-
-class UserPreferredDanceStyle(models.Model):
-    preference = models.ForeignKey(
-        "users.UserPreference",
-        on_delete=models.CASCADE,
-        related_name="preferred_dance_styles",
-    )
-    dance_style = models.ForeignKey(
-        DanceStyle,
-        on_delete=models.CASCADE,
-        related_name="preferred_by_users",
-    )
-
-    class Meta:
-        db_table = "user_preferred_dance_styles"
-        verbose_name = "Предпочитаемый стиль"
-        verbose_name_plural = "Предпочитаемые стили"
-        constraints = [
-            models.UniqueConstraint(
-                fields=["preference", "dance_style"],
-                name="unique_preferred_style_per_preference",
             )
         ]

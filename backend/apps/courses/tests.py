@@ -26,7 +26,6 @@ class CourseListAPIViewTests(APITestCase):
             first_name="Ксения",
             last_name="Карпова",
             role=UserRole.TEACHER,
-            is_teacher_enabled=True,
         )
         self.teacher = TeacherProfile.objects.create(user=self.teacher_user)
 

@@ -16,13 +16,11 @@ from apps.courses.models import (
     CourseScheduleRule,
     CourseStatus,
     DanceStyle,
-    Hall,
     Studio,
-    TeacherSpecialization,
 )
 from apps.courses.seed_data import COURSES_DATA
 from apps.locations.models import City
-from apps.users.models import DanceLevel, TeacherAchievement, TeacherProfile, TeacherReview, User, Weekday
+from apps.users.models import DanceLevel, TeacherProfile, TeacherReview, User, Weekday
 
 # Map frontend image keys to URL paths (frontend serves from /assets/images/...)
 COURSE_IMAGES_MAP = {
@@ -67,6 +65,7 @@ def parse_short_date(short: str, year: int | None = None) -> date:
     day, month = map(int, short.split("."))
     y = year if year is not None else timezone.localdate().year
     return datetime(y, month, day).date()
+
 
 class Command(BaseCommand):
     help = "Populate database with course data from frontend cards.ts"
@@ -142,26 +141,26 @@ class Command(BaseCommand):
                     "first_name": first_name,
                     "last_name": last_name,
                     "role": "teacher",
-                    "is_teacher_enabled": True,
                 },
             )
             user.first_name = first_name
             user.last_name = last_name
             user.role = "teacher"
-            user.is_teacher_enabled = True
             user.city = cities.get(card["city"])
             teacher_image_urls = [
                 TEACHER_IMAGES_MAP.get(image_key, f"/assets/images/teachers/{image_key}.jpg")
                 for image_key in t.get("images", [])
             ]
             user.avatar = teacher_image_urls[0] if teacher_image_urls else user.avatar
-            user.save(update_fields=["first_name", "last_name", "role", "is_teacher_enabled", "city", "avatar"])
+            user.save(update_fields=["first_name", "last_name", "role", "city", "avatar"])
 
             profile, _ = TeacherProfile.objects.get_or_create(
                 user=user,
                 defaults={
                     "bio": t["bio"],
                     "images": teacher_image_urls,
+                    "achievements": list(t.get("achievements", [])),
+                    "specializations": list(t.get("specializations", [])),
                     "experience_years": t["experience"],
                     "rating_avg": t["rating"],
                     "rating_count": len(t["reviews"]),
@@ -169,25 +168,12 @@ class Command(BaseCommand):
             )
             profile.bio = t["bio"]
             profile.images = teacher_image_urls
+            profile.achievements = list(t.get("achievements", []))
+            profile.specializations = list(t.get("specializations", []))
             profile.experience_years = t["experience"]
             profile.rating_avg = t["rating"]
             profile.rating_count = len(t["reviews"])
             profile.save()
-
-            for ach in t["achievements"]:
-                TeacherAchievement.objects.get_or_create(teacher=profile, title=ach, defaults={"description": ""})
-
-            for spec_name in t["specializations"]:
-                style = None
-                for ds in DanceStyle.objects.all():
-                    if ds.name == spec_name or spec_name in ds.name:
-                        style = ds
-                        break
-                if style:
-                    TeacherSpecialization.objects.get_or_create(
-                        teacher=profile,
-                        dance_style=style,
-                    )
 
             seen_teachers[name] = profile
             result[(name, card["id"])] = profile
@@ -244,12 +230,6 @@ class Command(BaseCommand):
             studio.save(update_fields=["metro"])
             result[key] = studio
 
-            hall, _ = Hall.objects.get_or_create(
-                studio=studio,
-                name="Основной зал",
-                defaults={"capacity": card["capacity"]},
-            )
-
         return result
 
     def _parse_time(self, s: str):
@@ -261,17 +241,15 @@ class Command(BaseCommand):
             teacher = teachers_map[(card["teacher"]["name"], card["id"])]
             city = card["city"]
             studio = studios_map[(card["studio"], city)]
-            hall = studio.halls.first()
             dance_style = dance_styles[card["type"]]
             level = LEVEL_MAP.get(card["level"], DanceLevel.ANY)
 
-            course, created = Course.objects.update_or_create(
+            course, _ = Course.objects.update_or_create(
                 id=card["id"],
                 defaults={
                     "teacher": teacher,
                     "dance_style": dance_style,
                     "studio": studio,
-                    "hall": hall,
                     "name": card["name"],
                     "description": card["description"],
                     "level": level,

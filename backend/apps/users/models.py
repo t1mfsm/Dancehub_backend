@@ -17,17 +17,10 @@ class UserRole(models.TextChoices):
 
 
 class DanceLevel(models.TextChoices):
-    BEGINNER = "beginner", "Начинающий"
-    INTERMEDIATE = "intermediate", "Средний"
-    ADVANCED = "advanced", "Продвинутый"
-    ANY = "any", "Любой"
-
-
-class AttendanceStatus(models.TextChoices):
-    PRESENT = "present", "Присутствовал"
-    ABSENT = "absent", "Отсутствовал"
-    LATE = "late", "Опоздал"
-    EXCUSED = "excused", "Уважительная причина"
+    BEGINNER = "Начинающие", "Начинающие"
+    INTERMEDIATE = "Средний уровень", "Средний уровень"
+    ADVANCED = "Продвинутые", "Продвинутые"
+    ANY = "Любой уровень", "Любой уровень"
 
 
 class Weekday(models.TextChoices):
@@ -42,7 +35,6 @@ class Weekday(models.TextChoices):
 
 class User(AbstractUser):
     email = models.EmailField(unique=True)
-    middle_name = models.CharField(max_length=150, blank=True)
     phone = models.CharField(max_length=32, blank=True)
     avatar = models.URLField(blank=True)
     city = models.ForeignKey(
@@ -53,7 +45,7 @@ class User(AbstractUser):
         related_name="users",
     )
     dance_level = models.CharField(
-        max_length=16,
+        max_length=32,
         choices=DanceLevel.choices,
         blank=True,
     )
@@ -62,8 +54,8 @@ class User(AbstractUser):
         choices=UserRole.choices,
         default=UserRole.STUDENT,
     )
-    is_teacher_enabled = models.BooleanField(default=False)
     survey_completed = models.BooleanField(default=False)
+    flags = models.JSONField(default=dict, blank=True)
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = ["username"]
@@ -82,6 +74,8 @@ class TeacherProfile(TimeStampedModel):
     )
     bio = models.TextField(blank=True)
     images = models.JSONField(default=list, blank=True)
+    achievements = models.JSONField(default=list, blank=True)
+    specializations = models.JSONField(default=list, blank=True)
     experience_years = models.PositiveIntegerField(default=0)
     rating_avg = models.DecimalField(max_digits=3, decimal_places=2, default=0)
     rating_count = models.PositiveIntegerField(default=0)
@@ -93,96 +87,6 @@ class TeacherProfile(TimeStampedModel):
 
     def __str__(self) -> str:
         return f"{self.user.get_full_name() or self.user.email}"
-
-
-class TeacherAchievement(models.Model):
-    teacher = models.ForeignKey(
-        TeacherProfile,
-        on_delete=models.CASCADE,
-        related_name="achievements",
-    )
-    title = models.CharField(max_length=255)
-    description = models.TextField(blank=True)
-    achieved_at = models.DateField(null=True, blank=True)
-
-    class Meta:
-        db_table = "teacher_achievements"
-        verbose_name = "Достижение преподавателя"
-        verbose_name_plural = "Достижения преподавателей"
-
-    def __str__(self) -> str:
-        return self.title
-
-
-class UserPreference(TimeStampedModel):
-    user = models.OneToOneField(
-        User,
-        on_delete=models.CASCADE,
-        related_name="preferences",
-    )
-    city = models.ForeignKey(
-        "locations.City",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="user_preferences",
-    )
-    level = models.CharField(max_length=16, choices=DanceLevel.choices, blank=True)
-    preferred_time_from = models.TimeField(null=True, blank=True)
-    preferred_time_to = models.TimeField(null=True, blank=True)
-    price_from = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    price_to = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    goal = models.CharField(max_length=255, blank=True)
-
-    class Meta:
-        db_table = "user_preferences"
-        verbose_name = "Предпочтение пользователя"
-        verbose_name_plural = "Предпочтения пользователей"
-
-
-class UserPreferredWeekday(models.Model):
-    preference = models.ForeignKey(
-        UserPreference,
-        on_delete=models.CASCADE,
-        related_name="preferred_weekdays",
-    )
-    weekday = models.CharField(max_length=3, choices=Weekday.choices)
-
-    class Meta:
-        db_table = "user_preferred_weekdays"
-        verbose_name = "Предпочитаемый день"
-        verbose_name_plural = "Предпочитаемые дни"
-        constraints = [
-            models.UniqueConstraint(
-                fields=["preference", "weekday"],
-                name="unique_preferred_weekday_per_preference",
-            )
-        ]
-
-
-class UserSkill(models.Model):
-    user = models.ForeignKey(
-        User,
-        on_delete=models.CASCADE,
-        related_name="skills",
-    )
-    dance_style = models.ForeignKey(
-        "courses.DanceStyle",
-        on_delete=models.CASCADE,
-        related_name="user_skills",
-    )
-    level = models.CharField(max_length=16, choices=DanceLevel.choices)
-
-    class Meta:
-        db_table = "user_skills"
-        verbose_name = "Навык пользователя"
-        verbose_name_plural = "Навыки пользователей"
-        constraints = [
-            models.UniqueConstraint(
-                fields=["user", "dance_style"],
-                name="unique_skill_per_user_and_style",
-            )
-        ]
 
 
 class FavoriteTeacher(models.Model):

@@ -1,4 +1,4 @@
-from django.db.models import Avg, Count, Q
+from django.db.models import Q
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import generics, permissions, status
@@ -11,15 +11,13 @@ from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from apps.courses.models import Attendance, Course, Enrollment, FavoriteCourse, Lesson
+from apps.courses.models import Course, Enrollment, FavoriteCourse
 from apps.courses.serializers import CourseDetailSerializer
 
-from .models import FavoriteTeacher, TeacherProfile, TeacherReview, UserPreference, UserSkill
+from .models import FavoriteTeacher, TeacherProfile
 from .serializers import (
     ChangePasswordSerializer,
-    CourseDashboardItemSerializer,
     CourseRecommendationSerializer,
-    LessonDashboardItemSerializer,
     FavoriteCourseSerializer,
     FavoriteTeacherSerializer,
     FavoritesResponseSerializer,
@@ -27,20 +25,11 @@ from .serializers import (
     LogoutSerializer,
     MeSerializer,
     MeUpdateSerializer,
-    MyCourseSerializer,
     RegisterSerializer,
-    SurveySubmitSerializer,
-    StudentDashboardSerializer,
     TeacherDetailSerializer,
-    TeacherDashboardSerializer,
-    TeacherReviewCreateSerializer,
-    TeacherReviewSerializer,
     TeacherProfileUpdateSerializer,
     TeacherCourseListSerializer,
     TeacherListSerializer,
-    UserPreferenceSerializer,
-    UserSkillSerializer,
-    UserSkillWriteItemSerializer,
 )
 
 
@@ -49,11 +38,9 @@ def _enrollment_queryset_with_course_detail():
         "course__teacher__user",
         "course__dance_style",
         "course__studio__city",
-        "course__hall",
     ).prefetch_related(
         "course__images",
-        "course__schedule_rules__hall",
-        "course__reviews",
+        "course__schedule_rules",
     )
 
 
@@ -64,7 +51,6 @@ def _enrollment_queryset_with_course_detail():
         description="Возвращает список преподавателей с базовой фильтрацией.",
         parameters=[
             OpenApiParameter(name="city", description="Название города", type=str),
-            OpenApiParameter(name="style", description="Slug или название стиля", type=str),
             OpenApiParameter(name="search", description="Имя, фамилия или email", type=str),
         ],
     )
@@ -75,23 +61,15 @@ class TeacherListAPIView(generics.ListAPIView):
     def get_queryset(self):
         queryset = (
             TeacherProfile.objects.select_related("user__city")
-            .prefetch_related("specializations__dance_style")
             .all()
             .order_by("user__last_name", "user__first_name")
         )
 
         city = self.request.query_params.get("city")
-        style = self.request.query_params.get("style")
         search = self.request.query_params.get("search")
 
         if city:
             queryset = queryset.filter(user__city__name__icontains=city)
-
-        if style:
-            queryset = queryset.filter(
-                Q(specializations__dance_style__slug__icontains=style)
-                | Q(specializations__dance_style__name__icontains=style)
-            )
 
         if search:
             queryset = queryset.filter(
@@ -125,7 +103,7 @@ class TeacherListAPIView(generics.ListAPIView):
     get=extend_schema(
         tags=["Teachers"],
         summary="Детальная информация о преподавателе",
-        description="Возвращает карточку преподавателя с курсами, достижениями и отзывами.",
+        description="Возвращает карточку преподавателя с курсами и отзывами.",
     )
 )
 class TeacherRetrieveAPIView(generics.RetrieveAPIView):
@@ -134,8 +112,6 @@ class TeacherRetrieveAPIView(generics.RetrieveAPIView):
 
     def get_queryset(self):
         return TeacherProfile.objects.select_related("user__city").prefetch_related(
-            "specializations__dance_style",
-            "achievements",
             "reviews__author_user",
             "courses__dance_style",
             "courses__studio",
@@ -154,7 +130,6 @@ class TeacherRetrieveAPIView(generics.RetrieveAPIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         teacher.refresh_from_db()
-
         return Response(TeacherDetailSerializer(teacher).data)
 
     @extend_schema(
@@ -170,7 +145,6 @@ class TeacherRetrieveAPIView(generics.RetrieveAPIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         teacher.refresh_from_db()
-
         return Response(TeacherDetailSerializer(teacher).data)
 
     def _get_or_create_current_teacher_profile(self, request) -> TeacherProfile:
@@ -178,10 +152,8 @@ class TeacherRetrieveAPIView(generics.RetrieveAPIView):
             raise ValidationError({"detail": "Профиль преподавателя доступен только для роли teacher."})
 
         teacher = TeacherProfile.objects.filter(user=request.user).first()
-
         if teacher is None:
             teacher = TeacherProfile.objects.create(user=request.user)
-
         return teacher
 
 
@@ -363,37 +335,6 @@ class EnrollmentListAPIView(generics.ListAPIView):
 
 @extend_schema_view(
     get=extend_schema(
-        tags=["Users"],
-        summary="Мои курсы",
-        description="Возвращает курсы текущего пользователя вместе со статусом записи.",
-        parameters=[
-            OpenApiParameter(name="status", description="Статус записи: active/pending/cancelled/completed", type=str),
-        ],
-    )
-)
-class MyCourseListAPIView(generics.ListAPIView):
-    serializer_class = MyCourseSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def get_queryset(self):
-        queryset = (
-            Enrollment.objects.select_related(
-                "course__teacher__user",
-                "course__dance_style",
-                "course__studio__city",
-            )
-            .filter(user=self.request.user)
-            .order_by("-created_at")
-        )
-        status_param = self.request.query_params.get("status")
-        if status_param:
-            queryset = queryset.filter(status=status_param)
-        return queryset
-
-
-@extend_schema_view(
-    get=extend_schema(
         tags=["Teachers"],
         summary="Мои курсы как преподавателя",
         description=(
@@ -417,12 +358,10 @@ class MyTeachingCourseListAPIView(generics.ListAPIView):
                 "teacher__user",
                 "dance_style",
                 "studio__city",
-                "hall",
             )
             .prefetch_related(
                 "images",
-                "schedule_rules__hall",
-                "reviews",
+                "schedule_rules",
             )
             .filter(teacher__user=self.request.user)
             .order_by("date_from", "id")
@@ -456,104 +395,6 @@ class TeacherCourseListAPIView(generics.ListAPIView):
         if status_param:
             queryset = queryset.filter(status=status_param)
         return queryset
-
-
-@extend_schema_view(
-    get=extend_schema(
-        tags=["Users"],
-        summary="Предпочтения пользователя",
-        description="Возвращает предпочтения текущего пользователя для опроса и рекомендаций.",
-        responses=UserPreferenceSerializer,
-    ),
-    patch=extend_schema(
-        tags=["Users"],
-        summary="Обновить предпочтения пользователя",
-        description="Создает или обновляет предпочтения текущего пользователя.",
-        request=UserPreferenceSerializer,
-        responses=UserPreferenceSerializer,
-    ),
-)
-class UserPreferenceAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def get_object(self):
-        preference, _ = UserPreference.objects.get_or_create(user=self.request.user)
-        return preference
-
-    def get(self, request):
-        serializer = UserPreferenceSerializer(self.get_object())
-        return Response(serializer.data)
-
-    def patch(self, request):
-        preference = self.get_object()
-        serializer = UserPreferenceSerializer(preference, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(UserPreferenceSerializer(preference).data)
-
-
-@extend_schema_view(
-    get=extend_schema(
-        tags=["Users"],
-        summary="Навыки пользователя",
-        description="Возвращает навыки текущего пользователя.",
-        responses=UserSkillSerializer(many=True),
-    ),
-    put=extend_schema(
-        tags=["Users"],
-        summary="Полностью заменить навыки пользователя",
-        description="Полностью заменяет список навыков текущего пользователя.",
-        request=UserSkillWriteItemSerializer(many=True),
-        responses=UserSkillSerializer(many=True),
-    ),
-    patch=extend_schema(
-        tags=["Users"],
-        summary="Частично обновить навыки пользователя",
-        description="Добавляет или обновляет навыки текущего пользователя.",
-        request=UserSkillWriteItemSerializer(many=True),
-        responses=UserSkillSerializer(many=True),
-    ),
-)
-class UserSkillAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def get(self, request):
-        skills = request.user.skills.select_related("dance_style").all().order_by("dance_style__name")
-        return Response(UserSkillSerializer(skills, many=True).data)
-
-    def put(self, request):
-        serializer = UserSkillWriteItemSerializer(data=request.data, many=True)
-        serializer.is_valid(raise_exception=True)
-        request.user.skills.all().delete()
-        skills = [
-            UserSkill(user=request.user, **item)
-            for item in serializer.validated_data
-        ]
-        UserSkill.objects.bulk_create(skills)
-        fresh = request.user.skills.select_related("dance_style").all().order_by("dance_style__name")
-        return Response(UserSkillSerializer(fresh, many=True).data)
-
-
-@extend_schema_view(
-    patch=extend_schema(
-        tags=["Users"],
-        summary="Сохранить опрос пользователя",
-        description="Сохраняет предпочтения, навыки и помечает опрос завершенным.",
-        request=SurveySubmitSerializer,
-        responses=MeSerializer,
-    ),
-)
-class UserSurveyAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def patch(self, request):
-        serializer = SurveySubmitSerializer(data=request.data, context={"request": request})
-        serializer.is_valid(raise_exception=True)
-        user = serializer.save()
-        return Response(MeSerializer(user).data)
 
 
 @extend_schema_view(
@@ -714,92 +555,9 @@ class ChangePasswordAPIView(APIView):
 
 @extend_schema_view(
     get=extend_schema(
-        tags=["Dashboard"],
-        summary="Дашборд ученика",
-        description="Возвращает краткую сводку по активным курсам, избранному и ближайшим занятиям ученика.",
-        responses=StudentDashboardSerializer,
-    )
-)
-class StudentDashboardAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def get(self, request):
-        active_enrollments = Enrollment.objects.filter(
-            user=request.user,
-            status__in=["active", "pending", "completed"],
-        )
-        active_course_ids = active_enrollments.values_list("course_id", flat=True)
-        nearest_lessons = Lesson.objects.filter(
-            course_id__in=active_course_ids,
-            lesson_date__gte=timezone.localdate(),
-        ).select_related("course").order_by("lesson_date", "time_from")[:5]
-        data = {
-            "active_courses_count": active_enrollments.filter(status="active").count(),
-            "favorites_count": request.user.favorite_courses.count(),
-            "upcoming_lessons_count": Lesson.objects.filter(course_id__in=active_course_ids, lesson_date__gte=timezone.localdate()).count(),
-            "nearest_lessons": LessonDashboardItemSerializer(nearest_lessons, many=True).data,
-        }
-        return Response(data)
-
-
-@extend_schema_view(
-    get=extend_schema(
-        tags=["Dashboard"],
-        summary="Дашборд преподавателя",
-        description="Возвращает сводку по курсам, ученикам, ближайшим занятиям и посещаемости преподавателя.",
-        responses=TeacherDashboardSerializer,
-    )
-)
-class TeacherDashboardAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def get(self, request):
-        if not hasattr(request.user, "teacher_profile"):
-            raise PermissionDenied("Дашборд преподавателя доступен только преподавателю.")
-
-        courses = Course.objects.filter(teacher__user=request.user).annotate(
-            students_count=Count(
-                "enrollments",
-                filter=Q(enrollments__status__in=["active", "pending", "completed"]),
-                distinct=True,
-            ),
-            lessons_count=Count("lessons", distinct=True),
-        ).order_by("date_from", "id")
-
-        course_ids = courses.values_list("id", flat=True)
-        nearest_lessons = Lesson.objects.filter(
-            course_id__in=course_ids,
-            lesson_date__gte=timezone.localdate(),
-        ).select_related("course").order_by("lesson_date", "time_from")[:5]
-
-        attendance_total = Attendance.objects.filter(lesson__course_id__in=course_ids).count()
-        attendance_present = Attendance.objects.filter(
-            lesson__course_id__in=course_ids,
-            status="present",
-        ).count()
-        attendance_rate = round((attendance_present / attendance_total) * 100, 2) if attendance_total else 0.0
-
-        data = {
-            "courses_count": courses.count(),
-            "students_count": Enrollment.objects.filter(
-                course_id__in=course_ids,
-                status__in=["active", "pending", "completed"],
-            ).values("user_id").distinct().count(),
-            "upcoming_lessons_count": Lesson.objects.filter(course_id__in=course_ids, lesson_date__gte=timezone.localdate()).count(),
-            "attendance_rate": attendance_rate,
-            "courses": CourseDashboardItemSerializer(courses[:5], many=True).data,
-            "nearest_lessons": LessonDashboardItemSerializer(nearest_lessons, many=True).data,
-        }
-        return Response(data)
-
-
-@extend_schema_view(
-    get=extend_schema(
         tags=["Recommendations"],
         summary="Рекомендованные курсы",
-        description="Возвращает рекомендованные курсы на основе предпочтений и навыков пользователя.",
+        description="Возвращает топ-10 опубликованных курсов по рейтингу преподавателя, с приоритетом под уровень пользователя.",
         responses=CourseRecommendationSerializer(many=True),
     )
 )
@@ -808,221 +566,23 @@ class RecommendedCourseListAPIView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
     authentication_classes = [JWTAuthentication, SessionAuthentication]
 
-    LEVEL_ORDER = {
-        "beginner": 1,
-        "intermediate": 2,
-        "advanced": 3,
-        "any": 0,
-    }
-
-    def _score_level(self, preference_level: str | None, course_level: str) -> tuple[int, str | None]:
-        if not preference_level:
-            return 0, None
-        if course_level == "any":
-            return 2, "подходит для любого уровня"
-        if preference_level == course_level:
-            return 5, "точно совпадает по уровню"
-
-        user_rank = self.LEVEL_ORDER.get(preference_level, 0)
-        course_rank = self.LEVEL_ORDER.get(course_level, 0)
-        if user_rank and course_rank and abs(user_rank - course_rank) == 1:
-            return 2, "близкий уровень подготовки"
-        return 0, None
-
-    def _score_price(self, preference, course: Course) -> tuple[int, str | None]:
-        if not preference:
-            return 0, None
-        if preference.price_from and preference.price_to:
-            if preference.price_from <= course.price <= preference.price_to:
-                return 4, "входит в желаемый бюджет"
-            return 0, None
-        if preference.price_to and course.price <= preference.price_to:
-            return 2, "ниже максимального бюджета"
-        if preference.price_from and course.price >= preference.price_from:
-            return 1, "соответствует минимальному бюджету"
-        return 0, None
-
-    def _score_schedule(self, preference, course: Course) -> tuple[int, list[str]]:
-        if not preference:
-            return 0, []
-
-        score = 0
-        reasons: list[str] = []
-        rules = list(course.schedule_rules.all())
-
-        preferred_weekdays = set(preference.preferred_weekdays.values_list("weekday", flat=True))
-        if preferred_weekdays and any(rule.weekday in preferred_weekdays for rule in rules):
-            score += 3
-            reasons.append("есть удобные дни недели")
-
-        if preference.preferred_time_from or preference.preferred_time_to:
-            for rule in rules:
-                start_ok = (
-                    preference.preferred_time_from is None
-                    or rule.time_from >= preference.preferred_time_from
-                )
-                end_ok = (
-                    preference.preferred_time_to is None
-                    or rule.time_to <= preference.preferred_time_to
-                )
-                if start_ok and end_ok:
-                    score += 3
-                    reasons.append("подходит по времени занятий")
-                    break
-
-        return score, reasons
-
     def get_queryset(self):
         user = self.request.user
-        try:
-            preference = user.preferences
-        except UserPreference.DoesNotExist:
-            preference = None
-        skill_style_ids = set(user.skills.values_list("dance_style_id", flat=True))
-        preferred_style_ids = (
-            set(preference.preferred_dance_styles.values_list("dance_style_id", flat=True))
-            if preference else set()
-        )
         enrolled_course_ids = set(
-            user.enrollments.filter(status__in=["active", "pending", "completed"]).values_list("course_id", flat=True)
-        )
-        favorite_course_ids = set(user.favorite_courses.values_list("course_id", flat=True))
-
-        queryset = Course.objects.select_related(
-            "teacher__user",
-            "dance_style",
-            "studio__city",
-        ).prefetch_related(
-            "schedule_rules",
-        ).filter(status="published").exclude(id__in=enrolled_course_ids)
-
-        city_name = self.request.query_params.get("city")
-        if city_name:
-            queryset = queryset.filter(studio__city__name__icontains=city_name)
-        elif preference and preference.city_id:
-            queryset = queryset.filter(Q(studio__city_id=preference.city_id) | Q(studio__isnull=True))
-
-        scored = []
-        for course in queryset:
-            score = 0
-            reasons: list[str] = []
-
-            if course.dance_style_id in preferred_style_ids:
-                score += 6
-                reasons.append("совпадает с предпочтительным стилем")
-            if course.dance_style_id in skill_style_ids:
-                score += 3
-                reasons.append("основан на текущих навыках")
-            if course.id in favorite_course_ids:
-                score += 2
-                reasons.append("похож на курс из избранного")
-
-            level_score, level_reason = self._score_level(preference.level if preference else None, course.level)
-            score += level_score
-            if level_reason:
-                reasons.append(level_reason)
-
-            if preference and preference.city_id and course.studio and course.studio.city_id == preference.city_id:
-                score += 4
-                reasons.append("проходит в выбранном городе")
-
-            price_score, price_reason = self._score_price(preference, course)
-            score += price_score
-            if price_reason:
-                reasons.append(price_reason)
-
-            schedule_score, schedule_reasons = self._score_schedule(preference, course)
-            score += schedule_score
-            reasons.extend(schedule_reasons)
-
-            if course.teacher.rating_avg >= 4.7:
-                score += 2
-                reasons.append("высокий рейтинг преподавателя")
-            elif course.teacher.rating_avg >= 4.3:
-                score += 1
-                reasons.append("хороший рейтинг преподавателя")
-
-            if course.teacher.rating_count >= 50:
-                score += 1
-                reasons.append("преподаватель с подтвержденным опытом по отзывам")
-
-            if preference and not preferred_style_ids and not skill_style_ids and preference.city_id and course.studio and course.studio.city_id == preference.city_id:
-                score += 1
-
-            if score > 0:
-                course.recommendation_score = score
-                course.recommendation_reason = ", ".join(reasons)
-                course.recommendation_reasons = reasons
-                scored.append(course)
-
-        if not scored:
-            fallback = list(
-                queryset.order_by("-teacher__rating_avg", "date_from", "id")[:10]
-            )
-            for course in fallback:
-                course.recommendation_score = 1
-                course.recommendation_reasons = ["популярный опубликованный курс"]
-                course.recommendation_reason = "популярный опубликованный курс"
-            return fallback
-
-        scored.sort(
-            key=lambda item: (
-                -item.recommendation_score,
-                -float(item.teacher.rating_avg),
-                item.date_from,
-                item.id,
+            user.enrollments.filter(status__in=["active", "pending", "completed"]).values_list(
+                "course_id", flat=True
             )
         )
-        return scored[:10]
 
-
-@extend_schema_view(
-    get=extend_schema(
-        tags=["Reviews"],
-        summary="Список отзывов о преподавателе",
-        description="Возвращает все отзывы выбранного преподавателя.",
-        responses=TeacherReviewSerializer(many=True),
-    ),
-    post=extend_schema(
-        tags=["Reviews"],
-        summary="Оставить отзыв о преподавателе",
-        description="Создает или обновляет отзыв текущего пользователя о преподавателе.",
-        request=TeacherReviewCreateSerializer,
-    ),
-)
-class TeacherReviewCreateAPIView(APIView):
-    serializer_class = TeacherReviewCreateSerializer
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def get_permissions(self):
-        if self.request.method == "GET":
-            return [permissions.AllowAny()]
-        return [permissions.IsAuthenticated()]
-
-    def get(self, request, teacher_id: int):
-        reviews = TeacherReview.objects.select_related("author_user").filter(teacher_id=teacher_id).order_by("-created_at")
-        return Response(TeacherReviewSerializer(reviews, many=True).data)
-
-    def post(self, request, teacher_id: int):
-        teacher = generics.get_object_or_404(TeacherProfile, id=teacher_id)
-        serializer = TeacherReviewCreateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        review, _ = TeacherReview.objects.update_or_create(
-            author_user=request.user,
-            teacher=teacher,
-            defaults=serializer.validated_data,
+        queryset = (
+            Course.objects.select_related("teacher__user", "dance_style", "studio__city")
+            .filter(status="published")
+            .exclude(id__in=enrolled_course_ids)
         )
-        teacher.rating_count = teacher.reviews.count()
-        teacher.rating_avg = teacher.reviews.aggregate(avg=Avg("rating"))["avg"] or 0
-        teacher.save(update_fields=["rating_count", "rating_avg", "updated_at"])
-        return Response(
-            {
-                "id": review.id,
-                "teacher_id": teacher.id,
-                "rating": review.rating,
-                "text": review.text,
-                "created_at": review.created_at,
-            },
-            status=status.HTTP_200_OK,
-        )
+
+        if user.dance_level:
+            queryset = queryset.filter(
+                Q(level=user.dance_level) | Q(level="Любой уровень")
+            )
+
+        return queryset.order_by("-teacher__rating_avg", "date_from", "id")[:10]

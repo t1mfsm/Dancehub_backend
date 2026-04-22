@@ -8,12 +8,8 @@ from .models import (
     DanceStyle,
     Enrollment,
     FavoriteCourse,
-    Hall,
     Lesson,
-    Review,
     Studio,
-    TeacherSpecialization,
-    UserPreferredDanceStyle,
 )
 
 
@@ -30,17 +26,6 @@ class StudioAdmin(admin.ModelAdmin):
     list_filter = ("city",)
 
 
-@admin.register(Hall)
-class HallAdmin(admin.ModelAdmin):
-    list_display = ("id", "studio", "name", "capacity")
-    search_fields = ("studio__name", "name")
-
-
-@admin.register(TeacherSpecialization)
-class TeacherSpecializationAdmin(admin.ModelAdmin):
-    list_display = ("id", "teacher", "dance_style")
-
-
 @admin.register(Course)
 class CourseAdmin(admin.ModelAdmin):
     list_display = ("id", "name", "teacher", "dance_style", "studio", "level", "status", "music_url")
@@ -55,7 +40,7 @@ class CourseImageAdmin(admin.ModelAdmin):
 
 @admin.register(CourseScheduleRule)
 class CourseScheduleRuleAdmin(admin.ModelAdmin):
-    list_display = ("id", "course", "weekday", "time_from", "time_to", "hall")
+    list_display = ("id", "course", "weekday", "time_from", "time_to")
 
 
 @admin.register(Lesson)
@@ -72,22 +57,10 @@ class EnrollmentAdmin(admin.ModelAdmin):
 
 @admin.register(Attendance)
 class AttendanceAdmin(admin.ModelAdmin):
-    list_display = ("id", "lesson", "student", "status", "marked_at")
-    list_filter = ("status",)
-
-
-@admin.register(Review)
-class ReviewAdmin(admin.ModelAdmin):
-    list_display = ("id", "course", "author_user", "rating", "created_at")
+    list_display = ("id", "lesson", "student", "present", "marked_at")
+    list_filter = ("present",)
 
 
 @admin.register(FavoriteCourse)
 class FavoriteCourseAdmin(admin.ModelAdmin):
     list_display = ("id", "user", "course", "created_at")
-
-
-@admin.register(UserPreferredDanceStyle)
-class UserPreferredDanceStyleAdmin(admin.ModelAdmin):
-    list_display = ("id", "preference", "dance_style")
-
-# Register your models here.
