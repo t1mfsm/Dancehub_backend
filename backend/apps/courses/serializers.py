@@ -2,7 +2,6 @@ import json
 import uuid
 from pathlib import Path
 
-from django.conf import settings
 from django.core.files.storage import default_storage
 from django.utils import timezone
 from rest_framework import serializers
@@ -19,6 +18,11 @@ def _build_absolute_url(value: str | None, request) -> str:
     if request is None:
         return value
     return request.build_absolute_uri(value)
+
+
+def _storage_url(path: str, request) -> str:
+    url = default_storage.url(path)
+    return _build_absolute_url(url, request)
 
 
 class DanceStyleSerializer(serializers.ModelSerializer):
@@ -618,13 +622,8 @@ class CourseWriteSerializer(serializers.ModelSerializer):
         extension = Path(image_file.name).suffix or ".jpg"
         filename = f"courses/{uuid.uuid4().hex}{extension}"
         stored_path = default_storage.save(filename, image_file)
-        media_url = f"{settings.MEDIA_URL}{stored_path}".replace("//", "/")
         request = self.context.get("request")
-
-        if request is not None:
-            return request.build_absolute_uri(media_url)
-
-        return media_url
+        return _storage_url(stored_path, request)
 
 
 class LessonWriteSerializer(serializers.ModelSerializer):

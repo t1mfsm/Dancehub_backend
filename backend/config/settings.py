@@ -106,6 +106,32 @@ if not FRONTEND_ASSETS_ROOT.exists():
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+USE_S3 = env_bool("USE_S3", default=False)
+if USE_S3:
+    INSTALLED_APPS += ["storages"]
+    AWS_ACCESS_KEY_ID = config("AWS_ACCESS_KEY_ID")
+    AWS_SECRET_ACCESS_KEY = config("AWS_SECRET_ACCESS_KEY")
+    AWS_STORAGE_BUCKET_NAME = config("AWS_STORAGE_BUCKET_NAME", default="dancehub-media")
+    AWS_S3_ENDPOINT_URL = config("AWS_S3_ENDPOINT_URL", default="http://minio:9000")
+    AWS_S3_REGION_NAME = config("AWS_S3_REGION_NAME", default="us-east-1")
+    AWS_S3_CUSTOM_DOMAIN = config("AWS_S3_CUSTOM_DOMAIN", default="")
+    AWS_S3_URL_PROTOCOL = config("AWS_S3_URL_PROTOCOL", default="http:")
+    AWS_QUERYSTRING_AUTH = env_bool("AWS_QUERYSTRING_AUTH", default=False)
+    AWS_S3_FILE_OVERWRITE = False
+    AWS_DEFAULT_ACL = None
+    AWS_S3_ADDRESSING_STYLE = config("AWS_S3_ADDRESSING_STYLE", default="path")
+    AWS_S3_OBJECT_PARAMETERS = {
+        "CacheControl": config("AWS_S3_CACHE_CONTROL", default="max-age=86400"),
+    }
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.s3.S3Storage",
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "users.User"
 
