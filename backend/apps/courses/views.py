@@ -1,7 +1,11 @@
+from datetime import date
+
 from django.db.models import Case, CharField, Count, Q, Value, When
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import exceptions, generics, permissions, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -10,10 +14,12 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from apps.users.models import TeacherProfile
 
 from .constants import CourseLifecycleStatus
-from .models import Attendance, Course, CourseStatus, DanceStyle, Enrollment, Lesson, Review, Studio
+from .lesson_utils import can_cancel_lesson
+from .models import Attendance, Course, CourseStatus, DanceStyle, Enrollment, Lesson, LessonStatus, Review, Studio
 from .serializers import (
     AttendanceMarkSerializer,
     AttendanceSerializer,
+    CourseAttendanceStatsSerializer,
     CalendarEventSerializer,
     CourseReviewCreateSerializer,
     CourseReviewSerializer,
@@ -28,6 +34,7 @@ from .serializers import (
     StudioDetailSerializer,
     StudioSerializer,
 )
+from .stats_service import build_course_attendance_stats
 
 
 @extend_schema_view(
@@ -313,12 +320,11 @@ class CourseRetrieveAPIView(generics.RetrieveUpdateDestroyAPIView):
     @extend_schema(
         tags=["Courses"],
         summary="Удалить курс",
-        description="Удаляет курс. Доступно преподавателю курса или администратору.",
+        description="Жёстко удаляет курс только у администратора. Преподаватель завершает курс через PATCH (status completed).",
     )
     def delete(self, request, *args, **kwargs):
-        course = self.get_object()
-        if not (request.user.is_superuser or course.teacher.user_id == request.user.id):
-            raise exceptions.PermissionDenied("Удалять курс может только преподаватель курса.")
+        if not request.user.is_superuser:
+            raise exceptions.PermissionDenied("Удаление курса доступно только администратору.")
         return super().delete(request, *args, **kwargs)
 
 
@@ -448,7 +454,8 @@ class CourseLessonListAPIView(generics.ListCreateAPIView):
 )
 class LessonRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Lesson.objects.select_related("course__teacher__user", "hall")
-    lookup_field = "lesson_id"
+    lookup_field = "pk"
+    lookup_url_kwarg = "lesson_id"
     permission_classes = [permissions.IsAuthenticated]
     authentication_classes = [JWTAuthentication, SessionAuthentication]
 
@@ -467,7 +474,7 @@ class LessonRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
         serializer = self.get_serializer(lesson, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return Response(LessonSerializer(lesson).data)
+        return Response(LessonSerializer(lesson, context={"request": request}).data)
 
     def put(self, request, *args, **kwargs):
         lesson = self.get_object()
@@ -475,12 +482,41 @@ class LessonRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
         serializer = self.get_serializer(lesson, data=request.data, partial=False)
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return Response(LessonSerializer(lesson).data)
+        return Response(LessonSerializer(lesson, context={"request": request}).data)
 
     def delete(self, request, *args, **kwargs):
         lesson = self.get_object()
         self._check_access(lesson, request.user)
         return super().delete(request, *args, **kwargs)
+
+
+@extend_schema(
+    tags=["Lessons"],
+    summary="Отменить занятие",
+    description="Помечает занятие как отменённое. Нельзя отменить уже прошедшее занятие.",
+    responses=LessonSerializer,
+)
+class LessonCancelAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [JWTAuthentication, SessionAuthentication]
+
+    def post(self, request, lesson_id: int):
+        lesson = get_object_or_404(
+            Lesson.objects.select_related("course__teacher__user", "hall"),
+            pk=lesson_id,
+        )
+        user = request.user
+
+        if not (user.is_superuser or lesson.course.teacher.user_id == user.id):
+            raise exceptions.PermissionDenied("Управлять занятием может только преподаватель курса.")
+
+        ok, msg = can_cancel_lesson(lesson)
+        if not ok:
+            raise ValidationError(msg or "Нельзя отменить занятие.")
+
+        lesson.status = LessonStatus.CANCELLED
+        lesson.save(update_fields=["status", "updated_at"])
+        return Response(LessonSerializer(lesson, context={"request": request}).data)
 
 
 @extend_schema_view(
@@ -531,6 +567,61 @@ class CourseAttendanceListAPIView(generics.ListAPIView):
             "lesson__course",
             "student",
         ).filter(lesson__course_id=self.kwargs["id"]).order_by("-lesson__lesson_date", "student_id")
+
+
+def _parse_query_date(value: str | None, field_label: str) -> date | None:
+    if value is None or value.strip() == "":
+        return None
+
+    try:
+        return date.fromisoformat(value.strip())
+    except ValueError:
+        raise exceptions.ValidationError({field_label: "Ожидается дата в формате YYYY-MM-DD."})
+
+
+@extend_schema(
+    tags=["Attendance"],
+    summary="Статистика посещаемости по курсу",
+    description="Агрегированные показатели для экрана «Статистика» преподавателя (период — по дате занятия).",
+    parameters=[
+        OpenApiParameter(
+            name="date_from",
+            type=str,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            description="Начало периода (YYYY-MM-DD)",
+        ),
+        OpenApiParameter(
+            name="date_to",
+            type=str,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            description="Конец периода (YYYY-MM-DD)",
+        ),
+    ],
+    responses={200: CourseAttendanceStatsSerializer},
+)
+class CourseAttendanceStatsAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [JWTAuthentication, SessionAuthentication]
+
+    def get(self, request, id: int):
+        course = generics.get_object_or_404(Course.objects.select_related("teacher__user"), id=id)
+
+        if not (
+            request.user.is_superuser or course.teacher.user_id == request.user.id
+        ):
+            raise exceptions.PermissionDenied("Статистика доступна только преподавателю курса.")
+
+        date_from = _parse_query_date(request.query_params.get("date_from"), "date_from")
+        date_to = _parse_query_date(request.query_params.get("date_to"), "date_to")
+
+        if date_from is not None and date_to is not None and date_to < date_from:
+            date_from, date_to = date_to, date_from
+
+        payload = build_course_attendance_stats(course, date_from=date_from, date_to=date_to)
+
+        return Response(payload, status=status.HTTP_200_OK)
 
 
 @extend_schema_view(

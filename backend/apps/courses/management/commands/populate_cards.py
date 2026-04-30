@@ -3,8 +3,12 @@ Management command to populate the database with course data from frontend cards
 """
 import uuid
 from datetime import date, datetime
+from pathlib import Path
 
+from django.conf import settings
+from django.core.files import File
 from django.core.management.base import BaseCommand
+from django.core.files.storage import default_storage
 from django.db import connection
 from django.db import transaction
 from django.utils import timezone
@@ -21,27 +25,29 @@ from apps.courses.models import (
     TeacherSpecialization,
 )
 from apps.courses.seed_data import COURSES_DATA
+from apps.courses.services import generate_course_lessons
 from apps.locations.models import City
 from apps.users.models import DanceLevel, TeacherAchievement, TeacherProfile, TeacherReview, User, Weekday
 
-# Map frontend image keys to URL paths (frontend serves from /assets/images/...)
+# Map frontend image keys to local asset files. The command stores these files
+# through Django storage, so with USE_S3=True they are uploaded to MinIO.
 COURSE_IMAGES_MAP = {
-    "highHeels1": "/assets/images/courses/high-heels-1.jpg",
-    "highHeels2": "/assets/images/courses/high-heels-2.jpg",
-    "contemporary": "/assets/images/courses/contemporary.jpg",
-    "jazzFunk": "/assets/images/courses/jazz-funk.jpg",
-    "vogue": "/assets/images/courses/vogue.jpg",
-    "hipHop": "/assets/images/courses/hip-hop.jpg",
-    "dancehall": "/assets/images/courses/dancehall.jpeg",
-    "frameUp": "/assets/images/courses/frame-up.jpg",
-    "stretching": "/assets/images/courses/stretching.png",
-    "ladyStyle": "/assets/images/courses/lady-style.jpg",
+    "highHeels1": "courses/high-heels-1.jpg",
+    "highHeels2": "courses/high-heels-2.jpg",
+    "contemporary": "courses/contemporary.jpg",
+    "jazzFunk": "courses/jazz-funk.jpg",
+    "vogue": "courses/vogue.jpg",
+    "hipHop": "courses/hip-hop.jpg",
+    "dancehall": "courses/dancehall.jpeg",
+    "frameUp": "courses/frame-up.jpg",
+    "stretching": "courses/stretching.png",
+    "ladyStyle": "courses/lady-style.jpg",
 }
 
 TEACHER_IMAGES_MAP = {
-    "woman": "/assets/images/teachers/woman.jpg",
-    "woman2": "/assets/images/teachers/w2.avif",
-    "man": "/assets/images/teachers/man.png",
+    "woman": "teachers/woman.jpg",
+    "woman2": "teachers/w2.avif",
+    "man": "teachers/man.png",
 }
 
 LEVEL_MAP = {
@@ -60,6 +66,8 @@ WEEKDAY_MAP = {
     "Сб": Weekday.SATURDAY,
     "Вс": Weekday.SUNDAY,
 }
+
+COURSE_ASSET_EXTENSIONS = {".avif", ".jpeg", ".jpg", ".png", ".webp"}
 
 
 def parse_short_date(short: str, year: int | None = None) -> date:
@@ -85,6 +93,7 @@ class Command(BaseCommand):
 
             cities = self._ensure_cities()
             dance_styles = self._ensure_dance_styles()
+            self._store_all_course_assets()
             teachers_map = self._ensure_teachers(cities)
             studios_map = self._ensure_studios(cities)
             self._create_courses(dance_styles, teachers_map, studios_map)
@@ -151,8 +160,9 @@ class Command(BaseCommand):
             user.is_teacher_enabled = True
             user.city = cities.get(card["city"])
             teacher_image_urls = [
-                TEACHER_IMAGES_MAP.get(image_key, f"/assets/images/teachers/{image_key}.jpg")
+                self._store_seed_asset(TEACHER_IMAGES_MAP[image_key])
                 for image_key in t.get("images", [])
+                if image_key in TEACHER_IMAGES_MAP
             ]
             user.avatar = teacher_image_urls[0] if teacher_image_urls else user.avatar
             user.save(update_fields=["first_name", "last_name", "role", "is_teacher_enabled", "city", "avatar"])
@@ -284,16 +294,15 @@ class Command(BaseCommand):
                     "music_artist": card["music"]["artist"],
                     "music_track": card["music"]["track"],
                     "music_url": card["music"]["url"],
-                    "image_cover": COURSE_IMAGES_MAP.get(
-                        card["images"][0] if card["images"] else "",
-                        "/assets/images/courses/placeholder.jpg",
-                    ),
+                    "image_cover": self._store_seed_asset(COURSE_IMAGES_MAP[card["images"][0]])
+                    if card["images"]
+                    else "",
                 },
             )
 
             CourseImage.objects.filter(course=course).delete()
             for i, img_key in enumerate(card["images"]):
-                url = COURSE_IMAGES_MAP.get(img_key, f"/assets/images/courses/{img_key}.jpg")
+                url = self._store_seed_asset(COURSE_IMAGES_MAP[img_key])
                 CourseImage.objects.create(course=course, image=url, sort_order=i)
 
             CourseScheduleRule.objects.filter(course=course).delete()
@@ -320,6 +329,29 @@ class Command(BaseCommand):
                             time_to=self._parse_time(card["timeTo"]),
                             location_text=card.get("location", ""),
                         )
+
+            generate_course_lessons(course)
+
+    def _store_seed_asset(self, relative_path: str) -> str:
+        source_path = Path(settings.FRONTEND_ASSETS_ROOT) / "images" / relative_path
+        if not source_path.exists():
+            raise FileNotFoundError(f"Frontend asset not found: {source_path}")
+
+        storage_path = f"seed/{relative_path}"
+        if not default_storage.exists(storage_path):
+            with source_path.open("rb") as source:
+                default_storage.save(storage_path, File(source, name=source_path.name))
+
+        return default_storage.url(storage_path)
+
+    def _store_all_course_assets(self) -> None:
+        courses_dir = Path(settings.FRONTEND_ASSETS_ROOT) / "images" / "courses"
+        if not courses_dir.exists():
+            raise FileNotFoundError(f"Frontend course assets directory not found: {courses_dir}")
+
+        for source_path in sorted(courses_dir.iterdir()):
+            if source_path.is_file() and source_path.suffix.lower() in COURSE_ASSET_EXTENSIONS:
+                self._store_seed_asset(f"courses/{source_path.name}")
 
     def _sync_course_id_sequence(self):
         """Bring PostgreSQL sequence in sync after explicit id inserts."""

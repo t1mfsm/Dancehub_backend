@@ -167,3 +167,9 @@ SIMPLE_JWT = {
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
+
+# При POST /courses/ — автозапись демопользователей (см. apps.courses.seed_course_students).
+ENROLL_RANDOM_STUDENTS_ON_COURSE_CREATION = env_bool(
+    "ENROLL_RANDOM_STUDENTS_ON_COURSE_CREATION",
+    default=True,
+)

@@ -21,7 +21,7 @@ class CourseStatus(models.TextChoices):
 class LessonStatus(models.TextChoices):
     SCHEDULED = "scheduled", "Запланировано"
     CANCELLED = "cancelled", "Отменено"
-    COMPLETED = "completed", "Проведено"
+    COMPLETED = "completed", "Завершено"
 
 
 class EnrollmentStatus(models.TextChoices):

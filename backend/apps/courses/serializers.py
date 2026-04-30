@@ -7,7 +7,22 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from .constants import CourseLifecycleStatus
-from .models import Attendance, Course, CourseImage, CourseScheduleRule, DanceStyle, Hall, Lesson, Review, Studio
+from .lesson_utils import can_cancel_lesson, effective_lesson_status
+from .models import (
+    Attendance,
+    Course,
+    CourseImage,
+    CourseScheduleRule,
+    CourseStatus,
+    DanceStyle,
+    Hall,
+    Lesson,
+    LessonStatus,
+    Review,
+    Studio,
+)
+from .seed_course_students import enroll_random_demo_students
+from .services import refresh_course_lessons_from_schedule
 
 
 def _build_absolute_url(value: str | None, request) -> str:
@@ -228,7 +243,11 @@ class CourseListSerializer(serializers.ModelSerializer):
         return max(0, obj.capacity - active)
 
     def get_status(self, obj: Course) -> str:
-        """Витрина: только active | completed по date_to (см. CourseLifecycleStatus)."""
+        """Витрина: active | completed | cancelled; завершение/отмена из БД имеют приоритет над датами."""
+        if obj.status == CourseStatus.COMPLETED:
+            return CourseLifecycleStatus.COMPLETED
+        if obj.status == CourseStatus.CANCELLED:
+            return "cancelled"
         if hasattr(obj, "activity_status"):
             return obj.activity_status
         today = timezone.localdate()
@@ -310,6 +329,11 @@ class LessonSerializer(serializers.ModelSerializer):
     def get_teacher_name(self, obj: Lesson) -> str:
         return obj.course.teacher.user.get_full_name() or obj.course.teacher.user.email
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["status"] = effective_lesson_status(instance)
+        return data
+
 
 class CalendarEventSerializer(serializers.ModelSerializer):
     course_id = serializers.IntegerField(source="course.id", read_only=True)
@@ -349,6 +373,11 @@ class CalendarEventSerializer(serializers.ModelSerializer):
     def get_end(self, obj: Lesson) -> str:
         return f"{obj.lesson_date}T{obj.time_to}"
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["status"] = effective_lesson_status(instance)
+        return data
+
 
 class AttendanceSerializer(serializers.ModelSerializer):
     lesson_id = serializers.IntegerField(source="lesson.id", read_only=True)
@@ -379,6 +408,34 @@ class AttendanceSerializer(serializers.ModelSerializer):
 class AttendanceMarkSerializer(serializers.Serializer):
     student_id = serializers.IntegerField()
     status = serializers.ChoiceField(choices=Attendance._meta.get_field("status").choices)
+
+
+class CourseAttendancePerLessonStatsSerializer(serializers.Serializer):
+    lesson_id = serializers.IntegerField()
+    date = serializers.DateField()
+    present = serializers.IntegerField()
+    absent = serializers.IntegerField()
+    total = serializers.IntegerField()
+    percent = serializers.IntegerField()
+
+
+class CourseAttendancePerStudentStatsSerializer(serializers.Serializer):
+    student_id = serializers.IntegerField()
+    student_name = serializers.CharField()
+    attended = serializers.IntegerField()
+    missed = serializers.IntegerField()
+    total = serializers.IntegerField()
+    percent = serializers.IntegerField()
+
+
+class CourseAttendanceStatsSerializer(serializers.Serializer):
+    total_lessons = serializers.IntegerField()
+    conducted_lessons = serializers.IntegerField()
+    cancelled_lessons = serializers.IntegerField()
+    avg_attendance_percent = serializers.IntegerField()
+    total_students = serializers.IntegerField()
+    per_lesson = CourseAttendancePerLessonStatsSerializer(many=True)
+    per_student = CourseAttendancePerStudentStatsSerializer(many=True)
 
 
 class CourseStudentSerializer(serializers.Serializer):
@@ -491,6 +548,25 @@ class CourseWriteSerializer(serializers.ModelSerializer):
             }
         }
 
+    def validate(self, attrs):
+        instance = self.instance
+        if instance is None:
+            return attrs
+
+        new_status = attrs.get("status")
+        if new_status is None:
+            return attrs
+
+        if new_status == CourseStatus.COMPLETED and instance.status in (
+            CourseStatus.COMPLETED,
+            CourseStatus.CANCELLED,
+        ):
+            raise serializers.ValidationError(
+                {"status": "Курс уже завершён или отменён."}
+            )
+
+        return attrs
+
     def to_internal_value(self, data):
         mutable_data = data.copy()
         schedule = mutable_data.get("schedule")
@@ -517,6 +593,8 @@ class CourseWriteSerializer(serializers.ModelSerializer):
         course = super().create(validated_data)
         self._save_uploaded_images(course, image_files)
         self._save_schedule(course, schedule_data)
+        refresh_course_lessons_from_schedule(course)
+        enroll_random_demo_students(course)
         return course
 
     def update(self, instance, validated_data):
@@ -524,6 +602,7 @@ class CourseWriteSerializer(serializers.ModelSerializer):
         image_files = validated_data.pop("image_files", [])
         ordered_image_urls = validated_data.pop("ordered_image_urls", None)
         schedule_data = validated_data.pop("schedule", None)
+        date_bounds_changed = ("date_from" in validated_data) or ("date_to" in validated_data)
         self._apply_uploaded_image(validated_data, image_file)
         if validated_data.get("image_cover") is None:
             validated_data["image_cover"] = ""
@@ -534,6 +613,9 @@ class CourseWriteSerializer(serializers.ModelSerializer):
             self._apply_ordered_gallery_urls(course, ordered_image_urls)
         if schedule_data is not None:
             self._save_schedule(course, schedule_data)
+
+        if schedule_data is not None or date_bounds_changed:
+            refresh_course_lessons_from_schedule(course)
         return course
 
     def _save_schedule(self, course: Course, schedule_data: list[dict]) -> None:
@@ -651,3 +733,21 @@ class LessonWriteSerializer(serializers.ModelSerializer):
             "location_text",
             "status",
         )
+
+    def validate(self, attrs):
+        instance = self.instance
+        if instance is None:
+            return attrs
+
+        new_status = attrs.get("status")
+        if new_status != LessonStatus.CANCELLED:
+            return attrs
+
+        if instance.status == LessonStatus.CANCELLED:
+            return attrs
+
+        can_cancel, msg = can_cancel_lesson(instance)
+        if not can_cancel and msg:
+            raise serializers.ValidationError({"status": msg})
+
+        return attrs
