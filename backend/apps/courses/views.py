@@ -94,28 +94,49 @@ class StudioRetrieveAPIView(generics.RetrieveAPIView):
 class MapPointListAPIView(generics.ListAPIView):
     serializer_class = MapPointSerializer
 
+    @staticmethod
+    def _split_query_values(value: str | None) -> list[str]:
+        if not value:
+            return []
+
+        return [item.strip() for item in value.split(",") if item.strip()]
+
     def get_queryset(self):
         queryset = Studio.objects.select_related("city").annotate(
             halls_count=Count("halls", distinct=True),
             active_courses_count=Count("courses", filter=Q(courses__status="published"), distinct=True),
         )
 
-        city = self.request.query_params.get("city")
-        metro = self.request.query_params.get("metro")
-        studio = self.request.query_params.get("studio")
-        style = self.request.query_params.get("style")
+        cities = self._split_query_values(self.request.query_params.get("city"))
+        metro_stations = self._split_query_values(self.request.query_params.get("metro"))
+        studios = self._split_query_values(self.request.query_params.get("studio"))
+        styles = self._split_query_values(self.request.query_params.get("style"))
 
-        if city:
-            queryset = queryset.filter(city__name__icontains=city)
-        if metro:
-            queryset = queryset.filter(metro__icontains=metro)
-        if studio:
-            queryset = queryset.filter(name__icontains=studio)
-        if style:
-            queryset = queryset.filter(
-                Q(courses__dance_style__slug__icontains=style)
-                | Q(courses__dance_style__name__icontains=style)
-            )
+        if cities:
+            city_query = Q()
+            for city in cities:
+                city_query |= Q(city__name__icontains=city)
+            queryset = queryset.filter(city_query)
+
+        if metro_stations:
+            metro_query = Q()
+            for metro in metro_stations:
+                metro_query |= Q(metro__icontains=metro)
+            queryset = queryset.filter(metro_query)
+
+        if studios:
+            studio_query = Q()
+            for studio in studios:
+                studio_query |= Q(name__icontains=studio)
+            queryset = queryset.filter(studio_query)
+
+        if styles:
+            style_query = Q()
+            for style in styles:
+                style_query |= Q(courses__dance_style__slug__icontains=style) | Q(
+                    courses__dance_style__name__icontains=style
+                )
+            queryset = queryset.filter(style_query)
 
         return queryset.distinct().order_by("name")
 

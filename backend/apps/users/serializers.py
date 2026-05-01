@@ -256,6 +256,7 @@ class MeSerializer(serializers.ModelSerializer):
     teacher = serializers.SerializerMethodField()
     favorite_course_ids = serializers.SerializerMethodField()
     favorite_teacher_ids = serializers.SerializerMethodField()
+    favorite_teacher_names = serializers.SerializerMethodField()
     preferred_time_from = serializers.SerializerMethodField()
     preferred_time_to = serializers.SerializerMethodField()
     price_from = serializers.SerializerMethodField()
@@ -280,6 +281,7 @@ class MeSerializer(serializers.ModelSerializer):
             "teacher",
             "favorite_course_ids",
             "favorite_teacher_ids",
+            "favorite_teacher_names",
             "preferred_time_from",
             "preferred_time_to",
             "price_from",
@@ -292,7 +294,13 @@ class MeSerializer(serializers.ModelSerializer):
         return list(obj.favorite_courses.values_list("course_id", flat=True))
 
     def get_favorite_teacher_ids(self, obj: User) -> list[int]:
-        return list(obj.favorite_teachers.values_list("teacher_id", flat=True))
+        return list(obj.favorite_teachers.order_by("created_at").values_list("teacher_id", flat=True))
+
+    def get_favorite_teacher_names(self, obj: User) -> list[str]:
+        return [
+            favorite.teacher.user.get_full_name() or favorite.teacher.user.email
+            for favorite in obj.favorite_teachers.select_related("teacher__user").order_by("created_at")
+        ]
 
     def get_teacher(self, obj: User) -> dict | None:
         teacher = TeacherProfile.objects.filter(user=obj).first()

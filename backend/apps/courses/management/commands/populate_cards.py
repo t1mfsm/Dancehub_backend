@@ -69,6 +69,111 @@ WEEKDAY_MAP = {
 
 COURSE_ASSET_EXTENSIONS = {".avif", ".jpeg", ".jpg", ".png", ".webp"}
 
+STUDIO_MAP_POINTS = {
+    ("ТанцХаб", "Москва"): {
+        "address": "Кожевническая ул. д43",
+        "metro": "м. Павелецкая",
+        "lat": 55.7298,
+        "lng": 37.6489,
+    },
+    ("DanceLab", "Москва"): {
+        "address": "Земляной Вал, д25",
+        "metro": "м. Курская",
+        "lat": 55.7584,
+        "lng": 37.6614,
+    },
+    ("Студия движения", "Москва"): {
+        "address": "Чистопрудный б-р, д12",
+        "metro": "м. Чистые пруды",
+        "lat": 55.7652,
+        "lng": 37.6385,
+    },
+    ("Арт-пространство", "Москва"): {
+        "address": "Марксистская ул. д9",
+        "metro": "м. Таганская",
+        "lat": 55.7394,
+        "lng": 37.6535,
+    },
+    ("Грация", "Москва"): {
+        "address": "Новослободская ул. д18",
+        "metro": "м. Новослободская",
+        "lat": 55.7791,
+        "lng": 37.6013,
+    },
+    ("ТанцХаб", "Санкт-Петербург"): {
+        "address": "Невский пр. д40",
+        "metro": "м. Гостиный двор",
+        "lat": 59.9343,
+        "lng": 30.3351,
+    },
+    ("Арт-пространство", "Санкт-Петербург"): {
+        "address": "Большой пр. П.С. д18",
+        "metro": "м. Петроградская",
+        "lat": 59.9665,
+        "lng": 30.3117,
+    },
+    ("Студия движения", "Санкт-Петербург"): {
+        "address": "Литейный пр. д26",
+        "metro": "м. Чернышевская",
+        "lat": 59.9445,
+        "lng": 30.3497,
+    },
+    ("Base Dance", "Москва"): {
+        "address": "ул. Покровка, д17",
+        "metro": "м. Китай-город",
+        "lat": 55.7596,
+        "lng": 37.6415,
+    },
+    ("Red Floor", "Москва"): {
+        "address": "Тверская ул. д18",
+        "metro": "м. Тверская",
+        "lat": 55.7651,
+        "lng": 37.6057,
+    },
+    ("Urban Beat", "Москва"): {
+        "address": "ул. Новый Арбат, д21",
+        "metro": "м. Смоленская",
+        "lat": 55.7521,
+        "lng": 37.5867,
+    },
+    ("Impulse Dance", "Москва"): {
+        "address": "Ленинградский пр-т, д31",
+        "metro": "м. Динамо",
+        "lat": 55.7897,
+        "lng": 37.5582,
+    },
+    ("Point Studio", "Москва"): {
+        "address": "ул. Большая Дмитровка, д9",
+        "metro": "м. Театральная",
+        "lat": 55.7607,
+        "lng": 37.6156,
+    },
+    ("Neva Dance", "Санкт-Петербург"): {
+        "address": "наб. реки Фонтанки, д59",
+        "metro": "м. Достоевская",
+        "lat": 59.9279,
+        "lng": 30.3428,
+    },
+    ("Sever Studio", "Санкт-Петербург"): {
+        "address": "Каменноостровский пр. д42",
+        "metro": "м. Петроградская",
+        "lat": 59.9661,
+        "lng": 30.3065,
+    },
+    ("Liteiny Dance", "Санкт-Петербург"): {
+        "address": "Литейный пр. д57",
+        "metro": "м. Маяковская",
+        "lat": 59.9374,
+        "lng": 30.3527,
+    },
+    ("Baltic Move", "Санкт-Петербург"): {
+        "address": "Васильевский остров, 6-я линия, д25",
+        "metro": "м. Василеостровская",
+        "lat": 59.9426,
+        "lng": 30.2782,
+    },
+}
+
 
 def parse_short_date(short: str, year: int | None = None) -> date:
     """Parse '17.02' -> date (год по умолчанию — текущий календарный год)."""
@@ -233,32 +338,47 @@ class Command(BaseCommand):
 
     def _ensure_studios(self, cities):
         result = {}
-        for card in COURSES_DATA:
-            studio_name = card["studio"]
-            city_name = card["city"]
-            location = card.get("location", "")
+
+        def ensure_studio(studio_name: str, city_name: str, location: str = "", capacity: int = 25):
             key = (studio_name, city_name)
             if key in result:
-                continue
+                return result[key]
 
             city = cities[city_name]
+            map_point = STUDIO_MAP_POINTS.get(key, {})
             studio, _ = Studio.objects.get_or_create(
                 name=studio_name,
                 city=city,
                 defaults={
-                    "address": location or studio_name,
-                    "metro": location or "",
+                    "address": map_point.get("address") or location or studio_name,
+                    "metro": map_point.get("metro") or location or "",
+                    "lat": map_point.get("lat"),
+                    "lng": map_point.get("lng"),
                 },
             )
-            studio.metro = location or studio.metro
-            studio.save(update_fields=["metro"])
+            studio.address = map_point.get("address") or studio.address
+            studio.metro = map_point.get("metro") or location or studio.metro
+            studio.lat = map_point.get("lat", studio.lat)
+            studio.lng = map_point.get("lng", studio.lng)
+            studio.save(update_fields=["address", "metro", "lat", "lng"])
             result[key] = studio
 
-            hall, _ = Hall.objects.get_or_create(
+            Hall.objects.get_or_create(
                 studio=studio,
                 name="Основной зал",
-                defaults={"capacity": card["capacity"]},
+                defaults={"capacity": capacity},
             )
+
+            return studio
+
+        for card in COURSES_DATA:
+            studio_name = card["studio"]
+            city_name = card["city"]
+            location = card.get("location", "")
+            ensure_studio(studio_name, city_name, location, card["capacity"])
+
+        for studio_name, city_name in STUDIO_MAP_POINTS:
+            ensure_studio(studio_name, city_name)
 
         return result
 

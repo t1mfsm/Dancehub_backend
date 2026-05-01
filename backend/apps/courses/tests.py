@@ -1,4 +1,5 @@
 from datetime import timedelta
+from datetime import time as dt_time
 
 from django.urls import reverse
 from django.utils import timezone
@@ -7,7 +8,8 @@ from rest_framework.test import APITestCase
 from apps.locations.models import City
 from apps.users.models import DanceLevel, TeacherProfile, User, UserRole
 
-from .models import Course, CourseStatus, DanceStyle, Studio
+from .models import Course, CourseScheduleRule, CourseStatus, DanceStyle, Lesson, Studio
+from .services import generate_course_lessons
 
 
 class CourseListAPIViewTests(APITestCase):
@@ -83,3 +85,35 @@ class CourseListAPIViewTests(APITestCase):
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["id"], completed_course.id)
         self.assertEqual(response.data[0]["status"], "completed")
+
+    def test_generate_course_lessons_resolves_weekday_from_db_string(self):
+        """Правило хранит weekday как str (например 'mon'); занятия должны создаваться."""
+        today = timezone.localdate()
+        weekday_values = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        weekday_str = weekday_values[today.weekday()]
+
+        course = Course.objects.create(
+            teacher=self.teacher,
+            dance_style=self.style,
+            studio=self.studio,
+            name="Scheduled course",
+            description="",
+            level=DanceLevel.BEGINNER,
+            price="1000.00",
+            capacity=10,
+            date_from=today,
+            date_to=today + timedelta(days=20),
+            status=CourseStatus.PUBLISHED,
+        )
+        CourseScheduleRule.objects.create(
+            course=course,
+            weekday=weekday_str,
+            time_from=dt_time(10, 0),
+            time_to=dt_time(11, 0),
+            location_text="Зал 1",
+        )
+
+        created = generate_course_lessons(course)
+
+        self.assertGreaterEqual(created, 1)
+        self.assertGreaterEqual(Lesson.objects.filter(course=course).count(), 1)

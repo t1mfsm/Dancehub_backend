@@ -4,15 +4,15 @@ from apps.users.models import Weekday
 
 from .models import Course, Lesson
 
-
-WEEKDAY_INDEX = {
-    Weekday.MONDAY: 0,
-    Weekday.TUESDAY: 1,
-    Weekday.WEDNESDAY: 2,
-    Weekday.THURSDAY: 3,
-    Weekday.FRIDAY: 4,
-    Weekday.SATURDAY: 5,
-    Weekday.SUNDAY: 6,
+# CourseScheduleRule.weekday хранит строковое значение Weekday ("mon", …), не объект enum.
+WEEKDAY_INDEX: dict[str, int] = {
+    Weekday.MONDAY.value: 0,
+    Weekday.TUESDAY.value: 1,
+    Weekday.WEDNESDAY.value: 2,
+    Weekday.THURSDAY.value: 3,
+    Weekday.FRIDAY.value: 4,
+    Weekday.SATURDAY.value: 5,
+    Weekday.SUNDAY.value: 6,
 }
 
 
