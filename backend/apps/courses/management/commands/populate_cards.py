@@ -16,18 +16,15 @@ from django.utils.text import slugify
 
 from apps.courses.models import (
     Course,
-    CourseImage,
-    CourseScheduleRule,
+    CourseSchedule,
     CourseStatus,
     DanceStyle,
-    Hall,
     Studio,
-    TeacherSpecialization,
 )
 from apps.courses.seed_data import COURSES_DATA
 from apps.courses.services import generate_course_lessons
 from apps.locations.models import City
-from apps.users.models import DanceLevel, TeacherAchievement, TeacherProfile, TeacherReview, User, Weekday
+from apps.users.models import DanceLevel, TeacherProfile, User, Weekday
 
 # Map frontend image keys to local asset files. The command stores these files
 # through Django storage, so with USE_S3=True they are uploaded to MinIO.
@@ -54,7 +51,7 @@ LEVEL_MAP = {
     "Начинающие": DanceLevel.BEGINNER,
     "Средний уровень": DanceLevel.INTERMEDIATE,
     "Продвинутые": DanceLevel.ADVANCED,
-    "Любой уровень": DanceLevel.ANY,
+    "Любой уровень": DanceLevel.BEGINNER,
 }
 
 WEEKDAY_MAP = {
@@ -105,7 +102,6 @@ class Command(BaseCommand):
         Course.objects.all().delete()
         TeacherProfile.objects.all().delete()
         User.objects.filter(email__startswith="teacher_").delete()
-        User.objects.filter(email__startswith="reviewer_").delete()
         Studio.objects.all().delete()
         DanceStyle.objects.all().delete()
         self.stdout.write("Cleared existing data")
@@ -151,13 +147,11 @@ class Command(BaseCommand):
                     "first_name": first_name,
                     "last_name": last_name,
                     "role": "teacher",
-                    "is_teacher_enabled": True,
                 },
             )
             user.first_name = first_name
             user.last_name = last_name
             user.role = "teacher"
-            user.is_teacher_enabled = True
             user.city = cities.get(card["city"])
             teacher_image_urls = [
                 self._store_seed_asset(TEACHER_IMAGES_MAP[image_key])
@@ -165,13 +159,15 @@ class Command(BaseCommand):
                 if image_key in TEACHER_IMAGES_MAP
             ]
             user.avatar = teacher_image_urls[0] if teacher_image_urls else user.avatar
-            user.save(update_fields=["first_name", "last_name", "role", "is_teacher_enabled", "city", "avatar"])
+            user.save(update_fields=["first_name", "last_name", "role", "city", "avatar"])
 
             profile, _ = TeacherProfile.objects.get_or_create(
                 user=user,
                 defaults={
                     "bio": t["bio"],
                     "images": teacher_image_urls,
+                    "achievements": t.get("achievements", []),
+                    "specializations": t.get("specializations", []),
                     "experience_years": t["experience"],
                     "rating_avg": t["rating"],
                     "rating_count": len(t["reviews"]),
@@ -179,57 +175,17 @@ class Command(BaseCommand):
             )
             profile.bio = t["bio"]
             profile.images = teacher_image_urls
+            profile.achievements = t.get("achievements", [])
+            profile.specializations = t.get("specializations", [])
             profile.experience_years = t["experience"]
             profile.rating_avg = t["rating"]
             profile.rating_count = len(t["reviews"])
             profile.save()
 
-            for ach in t["achievements"]:
-                TeacherAchievement.objects.get_or_create(teacher=profile, title=ach, defaults={"description": ""})
-
-            for spec_name in t["specializations"]:
-                style = None
-                for ds in DanceStyle.objects.all():
-                    if ds.name == spec_name or spec_name in ds.name:
-                        style = ds
-                        break
-                if style:
-                    TeacherSpecialization.objects.get_or_create(
-                        teacher=profile,
-                        dance_style=style,
-                    )
-
             seen_teachers[name] = profile
             result[(name, card["id"])] = profile
 
-            reviewer_users = self._ensure_reviewers(t["reviews"])
-            for rev_data, author_user in zip(t["reviews"], reviewer_users):
-                TeacherReview.objects.get_or_create(
-                    author_user=author_user,
-                    teacher=profile,
-                    defaults={
-                        "rating": rev_data["rating"],
-                        "text": rev_data["text"],
-                    },
-                )
-
         return result
-
-    def _ensure_reviewers(self, reviews):
-        users = []
-        for r in reviews:
-            author = r["author"]
-            email = f"reviewer_{uuid.uuid5(uuid.NAMESPACE_DNS, author).hex[:12]}@dancehub.local"
-            user, _ = User.objects.get_or_create(
-                email=email,
-                defaults={
-                    "username": email,
-                    "first_name": author,
-                    "last_name": "",
-                },
-            )
-            users.append(user)
-        return users
 
     def _ensure_studios(self, cities):
         result = {}
@@ -242,23 +198,21 @@ class Command(BaseCommand):
                 continue
 
             city = cities[city_name]
-            studio, _ = Studio.objects.get_or_create(
+            studio, created = Studio.objects.get_or_create(
                 name=studio_name,
                 city=city,
                 defaults={
                     "address": location or studio_name,
                     "metro": location or "",
+                    "halls_count": 1,
                 },
             )
-            studio.metro = location or studio.metro
-            studio.save(update_fields=["metro"])
+            if not created:
+                studio.metro = location or studio.metro
+                if studio.halls_count == 0:
+                    studio.halls_count = 1
+                studio.save(update_fields=["metro", "halls_count"])
             result[key] = studio
-
-            hall, _ = Hall.objects.get_or_create(
-                studio=studio,
-                name="Основной зал",
-                defaults={"capacity": card["capacity"]},
-            )
 
         return result
 
@@ -271,9 +225,15 @@ class Command(BaseCommand):
             teacher = teachers_map[(card["teacher"]["name"], card["id"])]
             city = card["city"]
             studio = studios_map[(card["studio"], city)]
-            hall = studio.halls.first()
             dance_style = dance_styles[card["type"]]
             level = LEVEL_MAP.get(card["level"], DanceLevel.ANY)
+
+            image_urls = [
+                self._store_seed_asset(COURSE_IMAGES_MAP[img_key])
+                for img_key in card.get("images", [])
+                if img_key in COURSE_IMAGES_MAP
+            ]
+            cover_url = image_urls[0] if image_urls else ""
 
             course, created = Course.objects.update_or_create(
                 id=card["id"],
@@ -281,38 +241,30 @@ class Command(BaseCommand):
                     "teacher": teacher,
                     "dance_style": dance_style,
                     "studio": studio,
-                    "hall": hall,
                     "name": card["name"],
                     "description": card["description"],
                     "level": level,
                     "price": card["price"],
                     "capacity": card["capacity"],
-                    "spots_left": card["spotsLeft"],
                     "date_from": parse_short_date(card["dateFrom"]),
                     "date_to": parse_short_date(card["dateTo"]),
                     "status": CourseStatus.PUBLISHED,
+                    "images": image_urls,
+                    "image_cover": cover_url,
                     "music_artist": card["music"]["artist"],
                     "music_track": card["music"]["track"],
                     "music_url": card["music"]["url"],
-                    "image_cover": self._store_seed_asset(COURSE_IMAGES_MAP[card["images"][0]])
-                    if card["images"]
-                    else "",
                 },
             )
 
-            CourseImage.objects.filter(course=course).delete()
-            for i, img_key in enumerate(card["images"]):
-                url = self._store_seed_asset(COURSE_IMAGES_MAP[img_key])
-                CourseImage.objects.create(course=course, image=url, sort_order=i)
-
-            CourseScheduleRule.objects.filter(course=course).delete()
+            CourseSchedule.objects.filter(course=course).delete()
             if "schedule" in card:
                 for entry in card["schedule"]:
                     weekdays_str = entry["weekday"]
                     for part in weekdays_str.replace("，", ",").split(","):
                         wd = part.strip()
                         if wd in WEEKDAY_MAP:
-                            CourseScheduleRule.objects.create(
+                            CourseSchedule.objects.create(
                                 course=course,
                                 weekday=WEEKDAY_MAP[wd],
                                 time_from=self._parse_time(entry["timeFrom"]),
@@ -322,7 +274,7 @@ class Command(BaseCommand):
             elif "weekdays" in card:
                 for wd in card["weekdays"]:
                     if wd in WEEKDAY_MAP:
-                        CourseScheduleRule.objects.create(
+                        CourseSchedule.objects.create(
                             course=course,
                             weekday=WEEKDAY_MAP[wd],
                             time_from=self._parse_time(card["timeFrom"]),
