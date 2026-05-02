@@ -2,14 +2,15 @@ from django.db import models
 
 
 class City(models.Model):
-    name = models.CharField(max_length=128, unique=True)
+    id = models.BigAutoField(primary_key=True)
+    name = models.TextField(unique=True)
 
     class Meta:
         db_table = "cities"
+        managed = False
+        ordering = ["name"]
         verbose_name = "Город"
         verbose_name_plural = "Города"
-        ordering = ["name"]
 
     def __str__(self) -> str:
         return self.name
-

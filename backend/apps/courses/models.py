@@ -1,249 +1,180 @@
+from django.contrib.postgres.fields import ArrayField
 from django.db import models
+from django.utils import timezone
 
-from apps.users.models import AttendanceStatus, DanceLevel, Weekday
-
-
-class TimeStampedModel(models.Model):
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        abstract = True
-
-
-class CourseStatus(models.TextChoices):
-    PUBLISHED = "published", "Опубликован"
-    ACTIVE = "active", "Активен"
-    COMPLETED = "completed", "Завершён"
-    CANCELLED = "cancelled", "Отменён"
-
-
-class LessonStatus(models.TextChoices):
-    SCHEDULED = "scheduled", "Запланировано"
-    CANCELLED = "cancelled", "Отменено"
-
-
-class EnrollmentStatus(models.TextChoices):
-    ACTIVE = "active", "Активна"
-    PENDING = "pending", "Ожидает оплаты"
-    CANCELLED = "cancelled", "Отменена"
-    COMPLETED = "completed", "Завершена"
+from apps.common.choices import (
+    AttendanceStatus,
+    CourseStatus,
+    DanceLevel,
+    EnrollmentStatus,
+    LessonStatus,
+    WeekdayCode,
+)
 
 
 class DanceStyle(models.Model):
-    name = models.CharField(max_length=128, unique=True)
-    slug = models.SlugField(max_length=140, unique=True)
+    id = models.BigAutoField(primary_key=True)
+    name = models.TextField(unique=True)
+    slug = models.TextField(unique=True)
 
     class Meta:
         db_table = "dance_styles"
+        managed = False
+        ordering = ["name"]
         verbose_name = "Танцевальный стиль"
         verbose_name_plural = "Танцевальные стили"
-        ordering = ["name"]
-
-    def __str__(self) -> str:
-        return self.name
 
 
-class Studio(TimeStampedModel):
-    name = models.CharField(max_length=255)
+class Studio(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    name = models.TextField()
     city = models.ForeignKey(
         "locations.City",
-        on_delete=models.CASCADE,
+        on_delete=models.RESTRICT,
         related_name="studios",
+        db_column="city_id",
     )
-    address = models.CharField(max_length=255)
-    metro = models.CharField(max_length=128, blank=True)
+    address = models.TextField()
+    metro = models.TextField(null=True, blank=True)
     lat = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     lng = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
-    image = models.URLField(blank=True)
+    image = models.TextField(null=True, blank=True)
     halls_count = models.PositiveIntegerField(default=0)
 
     class Meta:
         db_table = "studios"
+        managed = False
+        ordering = ["name"]
         verbose_name = "Студия"
         verbose_name_plural = "Студии"
-        ordering = ["name"]
-
-    def __str__(self) -> str:
-        return self.name
 
 
-class Course(TimeStampedModel):
+class Course(models.Model):
+    id = models.BigAutoField(primary_key=True)
     teacher = models.ForeignKey(
         "users.TeacherProfile",
-        on_delete=models.CASCADE,
+        on_delete=models.RESTRICT,
         related_name="courses",
+        db_column="teacher_id",
     )
     dance_style = models.ForeignKey(
         DanceStyle,
-        on_delete=models.PROTECT,
+        on_delete=models.RESTRICT,
         related_name="courses",
+        db_column="dance_style_id",
     )
     studio = models.ForeignKey(
         Studio,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
+        on_delete=models.RESTRICT,
         related_name="courses",
+        db_column="studio_id",
     )
-    name = models.CharField(max_length=255)
-    description = models.TextField(blank=True)
+    name = models.TextField()
+    description = models.TextField(default="", blank=True)
+    music_artist = models.TextField(default="", blank=True)
+    music_track = models.TextField(default="", blank=True)
+    music_url = models.TextField(default="", blank=True)
     level = models.CharField(max_length=16, choices=DanceLevel.choices)
-    price = models.DecimalField(max_digits=10, decimal_places=2)
+    price = models.IntegerField()
     capacity = models.PositiveIntegerField()
     date_from = models.DateField()
     date_to = models.DateField()
-    status = models.CharField(
-        max_length=16,
-        choices=CourseStatus.choices,
-        default=CourseStatus.PUBLISHED,
-    )
-    images = models.JSONField(default=list, blank=True)
-    image_cover = models.URLField(blank=True)
-    music_artist = models.CharField(max_length=255, blank=True)
-    music_track = models.CharField(max_length=255, blank=True)
-    music_url = models.URLField(blank=True)
+    status = models.CharField(max_length=16, choices=CourseStatus.choices, default=CourseStatus.PUBLISHED)
+    images = ArrayField(base_field=models.TextField(), default=list, blank=True)
+    image_cover = models.TextField(null=True, blank=True)
 
     class Meta:
         db_table = "courses"
+        managed = False
+        ordering = ["id"]
         verbose_name = "Курс"
         verbose_name_plural = "Курсы"
-        ordering = ["-created_at"]
-
-    def __str__(self) -> str:
-        return self.name
 
 
 class CourseSchedule(models.Model):
-    course = models.ForeignKey(
-        Course,
-        on_delete=models.CASCADE,
-        related_name="schedule_rules",
-    )
-    weekday = models.CharField(max_length=3, choices=Weekday.choices)
+    id = models.BigAutoField(primary_key=True)
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="schedule_rows", db_column="course_id")
+    weekday = models.CharField(max_length=3, choices=WeekdayCode.choices)
     time_from = models.TimeField()
     time_to = models.TimeField()
-    location_text = models.CharField(max_length=255, blank=True)
+    location_text = models.TextField(null=True, blank=True)
 
     class Meta:
         db_table = "course_schedule"
+        managed = False
         verbose_name = "Расписание курса"
         verbose_name_plural = "Расписания курсов"
 
 
-class Lesson(TimeStampedModel):
-    course = models.ForeignKey(
-        Course,
-        on_delete=models.CASCADE,
-        related_name="lessons",
-    )
+class Lesson(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="lessons", db_column="course_id")
     schedule = models.ForeignKey(
         CourseSchedule,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="lessons",
+        db_column="schedule_id",
     )
     lesson_date = models.DateField()
     time_from = models.TimeField()
     time_to = models.TimeField()
-    location_text = models.CharField(max_length=255, blank=True)
-    hall = models.CharField(max_length=255, blank=True)
-    status = models.CharField(
-        max_length=16,
-        choices=LessonStatus.choices,
-        default=LessonStatus.SCHEDULED,
-    )
+    location_text = models.TextField(null=True, blank=True)
+    status = models.CharField(max_length=16, choices=LessonStatus.choices, default=LessonStatus.SCHEDULED)
+    hall = models.TextField(null=True, blank=True)
 
     class Meta:
         db_table = "lessons"
+        managed = False
+        ordering = ["lesson_date", "time_from"]
         verbose_name = "Занятие"
         verbose_name_plural = "Занятия"
-        ordering = ["lesson_date", "time_from"]
 
 
-class Enrollment(TimeStampedModel):
-    user = models.ForeignKey(
-        "users.User",
-        on_delete=models.CASCADE,
-        related_name="enrollments",
-    )
-    course = models.ForeignKey(
-        Course,
-        on_delete=models.CASCADE,
-        related_name="enrollments",
-    )
-    enrolled_at = models.DateField()
-    status = models.CharField(
-        max_length=16,
-        choices=EnrollmentStatus.choices,
-        default=EnrollmentStatus.PENDING,
-    )
+class Enrollment(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    user = models.ForeignKey("users.User", on_delete=models.CASCADE, related_name="enrollments", db_column="user_id")
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="enrollments", db_column="course_id")
+    status = models.CharField(max_length=16, choices=EnrollmentStatus.choices, default=EnrollmentStatus.PENDING)
+    enrolled_at = models.DateTimeField(default=timezone.now)
     paid = models.BooleanField(default=False)
-    cancelled_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "enrollments"
+        managed = False
+        unique_together = [("user", "course")]
         verbose_name = "Запись на курс"
         verbose_name_plural = "Записи на курсы"
-        constraints = [
-            models.UniqueConstraint(
-                fields=["user", "course"],
-                name="unique_enrollment_per_user_and_course",
-            )
-        ]
 
 
 class AttendanceMark(models.Model):
-    lesson = models.ForeignKey(
-        Lesson,
-        on_delete=models.CASCADE,
-        related_name="attendance_marks",
-    )
+    id = models.BigAutoField(primary_key=True)
+    lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE, related_name="attendance_marks", db_column="lesson_id")
     student = models.ForeignKey(
         "users.User",
         on_delete=models.CASCADE,
         related_name="attendance_marks",
+        db_column="student_id",
     )
-    status = models.CharField(
-        max_length=16,
-        choices=AttendanceStatus.choices,
-        default=AttendanceStatus.PRESENT,
-    )
-    marked_at = models.DateTimeField(auto_now=True)
+    status = models.CharField(max_length=16, choices=AttendanceStatus.choices)
+    marked_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
         db_table = "attendance_marks"
+        managed = False
+        unique_together = [("lesson", "student")]
         verbose_name = "Отметка посещаемости"
         verbose_name_plural = "Отметки посещаемости"
-        constraints = [
-            models.UniqueConstraint(
-                fields=["lesson", "student"],
-                name="unique_attendance_per_lesson_and_student",
-            )
-        ]
 
 
 class FavoriteCourse(models.Model):
-    user = models.ForeignKey(
-        "users.User",
-        on_delete=models.CASCADE,
-        related_name="favorite_courses",
-    )
-    course = models.ForeignKey(
-        Course,
-        on_delete=models.CASCADE,
-        related_name="favorited_by",
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
+    user = models.ForeignKey("users.User", on_delete=models.CASCADE, related_name="favorite_courses", db_column="user_id")
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="favorited_by", db_column="course_id")
 
     class Meta:
         db_table = "favorite_courses"
+        managed = False
+        unique_together = [("user", "course")]
         verbose_name = "Избранный курс"
         verbose_name_plural = "Избранные курсы"
-        constraints = [
-            models.UniqueConstraint(
-                fields=["user", "course"],
-                name="unique_favorite_course",
-            )
-        ]

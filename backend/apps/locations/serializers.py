@@ -1,9 +1,8 @@
-from rest_framework import serializers
-
-from .models import City
+from apps.locations.models import City
 
 
-class CitySerializer(serializers.ModelSerializer):
-    class Meta:
-        model = City
-        fields = ("id", "name")
+def serialize_city(city: City) -> dict:
+    return {
+        "id": city.id,
+        "name": city.name,
+    }

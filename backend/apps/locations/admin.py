@@ -7,5 +7,4 @@ from .models import City
 class CityAdmin(admin.ModelAdmin):
     list_display = ("id", "name")
     search_fields = ("name",)
-
-# Register your models here.
+    ordering = ("id",)

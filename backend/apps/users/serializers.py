@@ -1,449 +1,319 @@
-from django.contrib.auth import authenticate
-from django.utils import timezone
+from django.contrib.auth.hashers import make_password
+from django.db import connection
 from rest_framework import serializers
-from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import FavoriteTeacher, TeacherProfile, TeacherReview, User, UserFlag, UserSkill
+from apps.common.choices import DanceLevel, UserRole, WeekdayCode
+from apps.common.files import persist_image_reference
+from apps.common.utils import absolutize_media_url, build_full_name
+from apps.users.models import TeacherProfile, User
 
 
-# ---------------------------------------------------------------------------
-# Auth
-# ---------------------------------------------------------------------------
-
-class RegisterSerializer(serializers.Serializer):
-    email = serializers.EmailField()
-    username = serializers.CharField(max_length=150)
-    password = serializers.CharField(write_only=True, min_length=8)
-    first_name = serializers.CharField(max_length=150, required=False, default="")
-    last_name = serializers.CharField(max_length=150, required=False, default="")
-
-    def validate_email(self, value):
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("Пользователь с таким email уже существует.")
-        return value
-
-    def validate_username(self, value):
-        if User.objects.filter(username=value).exists():
-            raise serializers.ValidationError("Пользователь с таким username уже существует.")
-        return value
-
-    def create(self, validated_data):
-        return User.objects.create_user(
-            email=validated_data["email"],
-            username=validated_data["username"],
-            password=validated_data["password"],
-            first_name=validated_data.get("first_name", ""),
-            last_name=validated_data.get("last_name", ""),
+def create_user_record(
+    *,
+    email: str,
+    username: str,
+    first_name: str,
+    middle_name: str = "",
+    last_name: str,
+    phone: str | None = None,
+    password_hash: str,
+    role: str = UserRole.STUDENT,
+    survey_completed: bool = False,
+    avatar: str | None = None,
+    city_id: int | None = None,
+    dance_level: str | None = None,
+    preferred_time_from=None,
+    preferred_time_to=None,
+    preferred_weekdays: list[str] | None = None,
+    preferred_dance_styles: list[str] | None = None,
+    price_from: int | None = None,
+    price_to: int | None = None,
+) -> User:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO users (
+                email,
+                username,
+                first_name,
+                middle_name,
+                last_name,
+                phone,
+                password_hash,
+                avatar,
+                city_id,
+                dance_level,
+                role,
+                survey_completed,
+                preferred_time_from,
+                preferred_time_to,
+                preferred_weekdays,
+                preferred_dance_styles,
+                price_from,
+                price_to
+            )
+            VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s::weekday_code[],
+                %s::text[],
+                %s, %s
+            )
+            RETURNING id
+            """,
+            [
+                email,
+                username,
+                first_name,
+                middle_name,
+                last_name,
+                phone,
+                password_hash,
+                avatar,
+                city_id,
+                dance_level,
+                role,
+                survey_completed,
+                preferred_time_from,
+                preferred_time_to,
+                preferred_weekdays or [],
+                preferred_dance_styles or [],
+                price_from,
+                price_to,
+            ],
         )
+        user_id = cursor.fetchone()[0]
+    return User.objects.select_related("city").get(id=user_id)
+
+
+def update_user_preferences_record(user_id: int, **fields) -> User:
+    assignments: list[str] = []
+    params: list[object] = []
+
+    field_mapping = {
+        "city_id": "city_id = %s",
+        "dance_level": "dance_level = %s",
+        "preferred_time_from": "preferred_time_from = %s",
+        "preferred_time_to": "preferred_time_to = %s",
+        "price_from": "price_from = %s",
+        "price_to": "price_to = %s",
+        "role": "role = %s",
+        "survey_completed": "survey_completed = %s",
+    }
+
+    for key, sql in field_mapping.items():
+        if key in fields:
+            assignments.append(sql)
+            params.append(fields[key])
+
+    if "preferred_weekdays" in fields:
+        assignments.append("preferred_weekdays = %s::weekday_code[]")
+        params.append(fields["preferred_weekdays"] or [])
+
+    if "preferred_dance_styles" in fields:
+        assignments.append("preferred_dance_styles = %s::text[]")
+        params.append(fields["preferred_dance_styles"] or [])
+
+    if assignments:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"UPDATE users SET {', '.join(assignments)} WHERE id = %s",
+                [*params, user_id],
+            )
+
+    return User.objects.select_related("city").get(id=user_id)
+
+
+def normalize_pg_text_array(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped in ("", "{}"):
+            return []
+        if stripped.startswith("{") and stripped.endswith("}"):
+            inner = stripped[1:-1]
+            if not inner:
+                return []
+            return [item.strip().strip('"') for item in inner.split(",") if item.strip()]
+    return []
+
+
+def serialize_teacher_profile_summary(teacher: TeacherProfile, request=None, rating: float = 0) -> dict:
+    return {
+        "bio": teacher.bio or "",
+        "images": [absolutize_media_url(request, image) for image in (teacher.images or [])],
+        "achievements": teacher.achievements or [],
+        "experience": teacher.experience_years,
+        "specializations": teacher.specializations or [],
+        "rating": round(float(rating or 0), 2),
+    }
+
+
+def serialize_user(user: User, request=None, teacher: TeacherProfile | None = None, teacher_rating: float = 0) -> dict:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT course_id
+            FROM favorite_courses
+            WHERE user_id = %s
+            ORDER BY course_id
+            """,
+            [user.id],
+        )
+        favorite_course_ids = [row[0] for row in cursor.fetchall()]
+        cursor.execute(
+            """
+            SELECT ft.teacher_id, u.first_name, u.middle_name, u.last_name, u.email
+            FROM favorite_teachers ft
+            JOIN teachers t ON t.id = ft.teacher_id
+            JOIN users u ON u.id = t.user_id
+            WHERE ft.user_id = %s
+            ORDER BY ft.teacher_id
+            """,
+            [user.id],
+        )
+        favorite_teacher_rows = cursor.fetchall()
+    return {
+        "id": user.id,
+        "email": user.email,
+        "username": user.username,
+        "first_name": user.first_name,
+        "middle_name": user.middle_name or "",
+        "last_name": user.last_name,
+        "avatar": absolutize_media_url(request, user.avatar) or None,
+        "city": user.city.name if user.city else None,
+        "dance_level": user.dance_level or "",
+        "role": user.role,
+        "survey_completed": user.survey_completed,
+        "teacher": (
+            serialize_teacher_profile_summary(teacher, request=request, rating=teacher_rating)
+            if teacher is not None
+            else None
+        ),
+        "favorite_course_ids": favorite_course_ids,
+        "favorite_teacher_ids": [row[0] for row in favorite_teacher_rows],
+        "favorite_teacher_names": [
+            build_full_name(row[3], row[1], row[2]) or row[4]
+            for row in favorite_teacher_rows
+        ],
+        "preferred_time_from": user.preferred_time_from.isoformat() if user.preferred_time_from else None,
+        "preferred_time_to": user.preferred_time_to.isoformat() if user.preferred_time_to else None,
+        "price_from": user.price_from,
+        "price_to": user.price_to,
+        "preferred_weekdays": normalize_pg_text_array(user.preferred_weekdays),
+        "preferred_dance_styles": normalize_pg_text_array(user.preferred_dance_styles),
+    }
 
 
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
-    password = serializers.CharField(write_only=True)
+    password = serializers.CharField()
 
-    def validate(self, data):
-        user = authenticate(
-            request=self.context.get("request"),
-            username=data["email"],
-            password=data["password"],
+
+class RegisterSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    username = serializers.CharField()
+    first_name = serializers.CharField()
+    middle_name = serializers.CharField(required=False, allow_blank=True, default="")
+    last_name = serializers.CharField()
+    phone = serializers.CharField(required=False, allow_blank=True, default="")
+    password = serializers.CharField(min_length=8)
+    password_confirm = serializers.CharField(min_length=8)
+
+    def validate(self, attrs):
+        if attrs["password"] != attrs["password_confirm"]:
+            raise serializers.ValidationError({"password_confirm": ["Passwords do not match."]})
+        if User.objects.filter(email=attrs["email"]).exists():
+            raise serializers.ValidationError({"email": ["A user with this email already exists."]})
+        if User.objects.filter(username=attrs["username"]).exists():
+            raise serializers.ValidationError({"username": ["A user with this username already exists."]})
+        return attrs
+
+    def create(self, validated_data):
+        validated_data.pop("password_confirm")
+        raw_password = validated_data.pop("password")
+        return create_user_record(
+            email=validated_data["email"],
+            username=validated_data["username"],
+            first_name=validated_data["first_name"],
+            middle_name=validated_data.get("middle_name", ""),
+            last_name=validated_data["last_name"],
+            phone=validated_data.get("phone") or None,
+            password_hash=make_password(raw_password),
+            role=UserRole.STUDENT,
+            survey_completed=False,
         )
-        if not user:
-            raise serializers.ValidationError("Неверный email или пароль.")
-        if not user.is_active:
-            raise serializers.ValidationError("Аккаунт заблокирован.")
-        data["user"] = user
-        return data
 
 
-class LogoutSerializer(serializers.Serializer):
+class RefreshSerializer(serializers.Serializer):
     refresh = serializers.CharField()
 
 
-class ChangePasswordSerializer(serializers.Serializer):
-    current_password = serializers.CharField(write_only=True)
-    new_password = serializers.CharField(write_only=True, min_length=8)
+class LogoutSerializer(serializers.Serializer):
+    refresh = serializers.CharField(required=False, allow_blank=True)
 
 
-# ---------------------------------------------------------------------------
-# User profile
-# ---------------------------------------------------------------------------
-
-class MeSerializer(serializers.ModelSerializer):
-    city = serializers.SerializerMethodField()
-    flags = serializers.SerializerMethodField()
-
-    class Meta:
-        model = User
-        fields = (
-            "id",
-            "email",
-            "username",
-            "first_name",
-            "last_name",
-            "middle_name",
-            "phone",
-            "avatar",
-            "city",
-            "dance_level",
-            "role",
-            "survey_completed",
-            "preferred_time_from",
-            "preferred_time_to",
-            "preferred_weekdays",
-            "preferred_dance_styles",
-            "price_from",
-            "price_to",
-            "flags",
-        )
-
-    def get_city(self, obj):
-        if obj.city:
-            return {"id": obj.city.id, "name": obj.city.name}
-        return None
-
-    def get_flags(self, obj):
-        return {f.name: f.value for f in obj.flags.all()}
+class UserUpdateSerializer(serializers.Serializer):
+    username = serializers.CharField(required=False)
+    first_name = serializers.CharField(required=False)
+    middle_name = serializers.CharField(required=False, allow_blank=True)
+    last_name = serializers.CharField(required=False)
+    phone = serializers.CharField(required=False, allow_blank=True)
+    survey_completed = serializers.BooleanField(required=False)
+    avatar_file = serializers.ImageField(required=False)
+    city = serializers.CharField(required=False, allow_blank=True)
+    dance_level = serializers.ChoiceField(required=False, choices=DanceLevel.choices)
+    role = serializers.ChoiceField(required=False, choices=UserRole.choices)
 
 
-class MeUpdateSerializer(serializers.ModelSerializer):
-    city_id = serializers.IntegerField(required=False, allow_null=True, write_only=True)
-
-    class Meta:
-        model = User
-        fields = (
-            "first_name",
-            "last_name",
-            "middle_name",
-            "phone",
-            "avatar",
-            "city_id",
-            "dance_level",
-        )
-
-    def update(self, instance, validated_data):
-        city_id = validated_data.pop("city_id", ...)
-        if city_id is not ...:
-            from apps.locations.models import City
-            instance.city = City.objects.filter(id=city_id).first() if city_id else None
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-        return instance
-
-
-# ---------------------------------------------------------------------------
-# Survey / preferences
-# ---------------------------------------------------------------------------
-
-class SurveySubmitSerializer(serializers.Serializer):
-    role = serializers.ChoiceField(choices=["student", "teacher"], required=False)
-    city_id = serializers.IntegerField(required=False, allow_null=True)
-    dance_level = serializers.ChoiceField(
-        choices=["beginner", "intermediate", "advanced"],
-        required=False,
-        allow_blank=True,
-    )
+class UserPreferencesSerializer(serializers.Serializer):
+    city = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    level = serializers.ChoiceField(required=False, allow_null=True, choices=[("any", "any"), *DanceLevel.choices])
     preferred_weekdays = serializers.ListField(
-        child=serializers.ChoiceField(choices=["mon", "tue", "wed", "thu", "fri", "sat", "sun"]),
-        required=False,
-    )
-    preferred_dance_styles = serializers.ListField(
-        child=serializers.IntegerField(),
+        child=serializers.ChoiceField(choices=WeekdayCode.choices),
         required=False,
     )
     preferred_time_from = serializers.TimeField(required=False, allow_null=True)
     preferred_time_to = serializers.TimeField(required=False, allow_null=True)
-    price_from = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True)
-    price_to = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True)
+    price_from = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    price_to = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    preferred_dance_styles = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+    )
+    role = serializers.ChoiceField(required=False, choices=UserRole.choices)
 
-    def update(self, instance: User, validated_data: dict) -> User:
-        if "city_id" in validated_data:
-            from apps.locations.models import City
-            city_id = validated_data.pop("city_id")
-            instance.city = City.objects.filter(id=city_id).first() if city_id else None
-        else:
-            validated_data.pop("city_id", None)
-
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-
-        instance.survey_completed = True
-        instance.save()
-        return instance
-
-
-# ---------------------------------------------------------------------------
-# Skills
-# ---------------------------------------------------------------------------
-
-class UserSkillSerializer(serializers.ModelSerializer):
-    dance_style = serializers.SerializerMethodField()
-
-    class Meta:
-        model = UserSkill
-        fields = ("id", "dance_style", "level")
-
-    def get_dance_style(self, obj):
-        return {"id": obj.dance_style.id, "name": obj.dance_style.name, "slug": obj.dance_style.slug}
+    def validate(self, attrs):
+        time_from = attrs.get("preferred_time_from")
+        time_to = attrs.get("preferred_time_to")
+        if time_from and time_to and time_from >= time_to:
+            raise serializers.ValidationError({"preferred_time_to": ["Must be later than preferred_time_from."]})
+        price_from = attrs.get("price_from")
+        price_to = attrs.get("price_to")
+        if price_from is not None and price_to is not None and price_from > price_to:
+            raise serializers.ValidationError({"price_to": ["Must be greater than or equal to price_from."]})
+        return attrs
 
 
-class UserSkillWriteItemSerializer(serializers.Serializer):
+class UserSkillItemSerializer(serializers.Serializer):
     dance_style_id = serializers.IntegerField()
-    level = serializers.ChoiceField(choices=["beginner", "intermediate", "advanced"])
+    level = serializers.ChoiceField(choices=[("any", "any"), *DanceLevel.choices])
 
-    def validate_dance_style_id(self, value):
-        from apps.courses.models import DanceStyle
-        if not DanceStyle.objects.filter(id=value).exists():
-            raise serializers.ValidationError("Танцевальный стиль не найден.")
-        return value
-
-
-# ---------------------------------------------------------------------------
-# User flags
-# ---------------------------------------------------------------------------
 
 class UserFlagSerializer(serializers.Serializer):
-    name = serializers.CharField(max_length=128)
+    name = serializers.CharField()
     value = serializers.BooleanField()
 
 
-# ---------------------------------------------------------------------------
-# Teachers
-# ---------------------------------------------------------------------------
+class TeacherProfileUpdateSerializer(serializers.Serializer):
+    bio = serializers.CharField(required=False, allow_blank=True)
+    images = serializers.ListField(child=serializers.CharField(), required=False)
+    achievements = serializers.ListField(child=serializers.CharField(), required=False)
+    experience = serializers.IntegerField(required=False, min_value=0)
+    specializations = serializers.ListField(child=serializers.CharField(), required=False)
 
-class TeacherReviewSerializer(serializers.ModelSerializer):
-    author_name = serializers.SerializerMethodField()
-
-    class Meta:
-        model = TeacherReview
-        fields = ("id", "author_name", "rating", "text", "created_at")
-
-    def get_author_name(self, obj) -> str:
-        return obj.author_user.get_full_name() or obj.author_user.email
-
-
-class TeacherReviewCreateSerializer(serializers.Serializer):
-    lesson_id = serializers.IntegerField()
-    rating = serializers.IntegerField(min_value=1, max_value=5)
-    text = serializers.CharField(required=False, default="")
-
-    def validate(self, data):
-        from apps.courses.models import AttendanceMark, Lesson
-        request = self.context["request"]
-        user = request.user
-
-        try:
-            lesson = Lesson.objects.select_related("course__teacher").get(id=data["lesson_id"])
-        except Lesson.DoesNotExist:
-            raise serializers.ValidationError({"lesson_id": "Занятие не найдено."})
-
-        has_attendance = AttendanceMark.objects.filter(
-            lesson=lesson,
-            student=user,
-            status="present",
-        ).exists()
-
-        if not has_attendance:
-            raise serializers.ValidationError(
-                "Отзыв можно оставить только после посещения занятия."
-            )
-
-        if TeacherReview.objects.filter(author_user=user, lesson=lesson).exists():
-            raise serializers.ValidationError("Вы уже оставили отзыв по этому занятию.")
-
-        data["lesson"] = lesson
-        data["teacher"] = lesson.course.teacher
-        return data
-
-
-class TeacherListSerializer(serializers.ModelSerializer):
-    user_id = serializers.IntegerField(source="user.id")
-    first_name = serializers.CharField(source="user.first_name")
-    last_name = serializers.CharField(source="user.last_name")
-    middle_name = serializers.CharField(source="user.middle_name")
-    avatar = serializers.URLField(source="user.avatar")
-    city = serializers.SerializerMethodField()
-
-    class Meta:
-        model = TeacherProfile
-        fields = (
-            "id",
-            "user_id",
-            "first_name",
-            "last_name",
-            "middle_name",
-            "avatar",
-            "city",
-            "experience_years",
-            "specializations",
-            "rating_avg",
-            "rating_count",
-        )
-
-    def get_city(self, obj):
-        if obj.user.city:
-            return {"id": obj.user.city.id, "name": obj.user.city.name}
-        return None
-
-
-class TeacherDetailSerializer(serializers.ModelSerializer):
-    user_id = serializers.IntegerField(source="user.id")
-    first_name = serializers.CharField(source="user.first_name")
-    last_name = serializers.CharField(source="user.last_name")
-    middle_name = serializers.CharField(source="user.middle_name")
-    avatar = serializers.URLField(source="user.avatar")
-    city = serializers.SerializerMethodField()
-    reviews = TeacherReviewSerializer(many=True, read_only=True)
-
-    class Meta:
-        model = TeacherProfile
-        fields = (
-            "id",
-            "user_id",
-            "first_name",
-            "last_name",
-            "middle_name",
-            "avatar",
-            "city",
-            "bio",
-            "experience_years",
-            "images",
-            "achievements",
-            "specializations",
-            "rating_avg",
-            "rating_count",
-            "reviews",
-        )
-
-    def get_city(self, obj):
-        if obj.user.city:
-            return {"id": obj.user.city.id, "name": obj.user.city.name}
-        return None
-
-
-class TeacherProfileUpdateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = TeacherProfile
-        fields = ("bio", "experience_years", "images", "achievements", "specializations")
-
-
-class TeacherCourseListSerializer(serializers.Serializer):
-    """Compact course list for teacher profile page."""
-    id = serializers.IntegerField()
-    name = serializers.CharField()
-    dance_style = serializers.SerializerMethodField()
-    level = serializers.CharField()
-    status = serializers.CharField()
-    date_from = serializers.DateField()
-    date_to = serializers.DateField()
-    image_cover = serializers.URLField()
-
-    def get_dance_style(self, obj):
-        return {"id": obj.dance_style.id, "name": obj.dance_style.name}
-
-
-# ---------------------------------------------------------------------------
-# Favorites
-# ---------------------------------------------------------------------------
-
-class FavoriteCourseSerializer(serializers.Serializer):
-    course_id = serializers.IntegerField()
-    course_name = serializers.CharField()
-
-
-class FavoriteTeacherSerializer(serializers.Serializer):
-    teacher_id = serializers.IntegerField()
-    teacher_name = serializers.CharField()
-
-
-class FavoritesResponseSerializer(serializers.Serializer):
-    courses = FavoriteCourseSerializer(many=True)
-    teachers = FavoriteTeacherSerializer(many=True)
-
-
-# ---------------------------------------------------------------------------
-# Recommendations
-# ---------------------------------------------------------------------------
-
-class CourseRecommendationSerializer(serializers.Serializer):
-    id = serializers.IntegerField()
-    name = serializers.CharField()
-    dance_style = serializers.SerializerMethodField()
-    teacher = serializers.SerializerMethodField()
-    studio = serializers.SerializerMethodField()
-    level = serializers.CharField()
-    price = serializers.DecimalField(max_digits=10, decimal_places=2)
-    date_from = serializers.DateField()
-    date_to = serializers.DateField()
-    image_cover = serializers.URLField()
-
-    def get_dance_style(self, obj):
-        return {"id": obj.dance_style.id, "name": obj.dance_style.name, "slug": obj.dance_style.slug}
-
-    def get_teacher(self, obj):
-        u = obj.teacher.user
-        return {"id": obj.teacher.id, "first_name": u.first_name, "last_name": u.last_name, "avatar": u.avatar}
-
-    def get_studio(self, obj):
-        if obj.studio:
-            return {"id": obj.studio.id, "name": obj.studio.name}
-        return None
-
-
-# ---------------------------------------------------------------------------
-# My courses (compact)
-# ---------------------------------------------------------------------------
-
-class MyCourseSerializer(serializers.Serializer):
-    course = serializers.SerializerMethodField()
-    status = serializers.CharField()
-
-    def get_course(self, obj):
-        return {"id": obj.course_id}
-
-
-# ---------------------------------------------------------------------------
-# Dashboard
-# ---------------------------------------------------------------------------
-
-class CourseDashboardItemSerializer(serializers.Serializer):
-    id = serializers.IntegerField()
-    name = serializers.CharField()
-    dance_style = serializers.SerializerMethodField()
-    image_cover = serializers.URLField()
-    next_lesson_date = serializers.SerializerMethodField()
-
-    def get_dance_style(self, obj):
-        return obj.dance_style.name
-
-    def get_next_lesson_date(self, obj):
-        today = timezone.localdate()
-        lesson = obj.lessons.filter(lesson_date__gte=today, status="scheduled").order_by("lesson_date", "time_from").first()
-        return lesson.lesson_date if lesson else None
-
-
-class LessonDashboardItemSerializer(serializers.Serializer):
-    id = serializers.IntegerField()
-    course_id = serializers.IntegerField(source="course.id")
-    course_name = serializers.CharField(source="course.name")
-    dance_style = serializers.SerializerMethodField()
-    lesson_date = serializers.DateField()
-    time_from = serializers.TimeField()
-    time_to = serializers.TimeField()
-    hall = serializers.CharField()
-    location_text = serializers.CharField()
-
-    def get_dance_style(self, obj):
-        return obj.course.dance_style.name
-
-
-class StudentDashboardSerializer(serializers.Serializer):
-    enrolled_courses_count = serializers.IntegerField()
-    upcoming_lessons = LessonDashboardItemSerializer(many=True)
-    favorite_courses_count = serializers.IntegerField()
-
-
-class TeacherDashboardSerializer(serializers.Serializer):
-    active_courses_count = serializers.IntegerField()
-    total_students = serializers.IntegerField()
-    upcoming_lessons = LessonDashboardItemSerializer(many=True)
+    def normalize_images(self, folder: str) -> list[str]:
+        raw_images = self.validated_data.get("images", [])
+        return [persist_image_reference(image, folder) for image in raw_images if image]

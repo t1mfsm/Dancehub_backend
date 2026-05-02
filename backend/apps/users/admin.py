@@ -1,63 +1,79 @@
 from django.contrib import admin
-from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.db.models import Avg
 
-from .models import FavoriteTeacher, TeacherProfile, TeacherReview, User, UserFlag, UserSkill
+from .admin_views import FavoriteTeacherAdminView, UserFlagAdminView, UserSkillAdminView
+from .models import TeacherProfile, TeacherReview, User
 
 
 @admin.register(User)
-class UserAdmin(BaseUserAdmin):
-    list_display = ("id", "email", "first_name", "last_name", "role", "city", "survey_completed")
-    list_filter = ("role", "survey_completed", "is_staff", "is_superuser")
-    search_fields = ("email", "first_name", "last_name", "phone")
+class UserAdmin(admin.ModelAdmin):
+    list_display = ("id", "email", "username", "first_name", "last_name", "role", "city", "survey_completed")
+    list_filter = ("role", "survey_completed", "dance_level", "city")
+    search_fields = ("email", "username", "first_name", "middle_name", "last_name", "phone")
     ordering = ("id",)
-    fieldsets = BaseUserAdmin.fieldsets + (
-        (
-            "Дополнительно",
-            {
-                "fields": (
-                    "phone",
-                    "avatar",
-                    "middle_name",
-                    "city",
-                    "dance_level",
-                    "role",
-                    "survey_completed",
-                    "preferred_time_from",
-                    "preferred_time_to",
-                    "preferred_weekdays",
-                    "preferred_dance_styles",
-                    "price_from",
-                    "price_to",
-                )
-            },
-        ),
-    )
+    readonly_fields = ("password_hash",)
 
-
-@admin.register(UserFlag)
-class UserFlagAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "name", "value")
-    search_fields = ("user__email", "name")
-
-
-@admin.register(UserSkill)
-class UserSkillAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "dance_style", "level")
-    search_fields = ("user__email", "dance_style__name")
+    class Meta:
+        verbose_name = "Пользователь"
+        verbose_name_plural = "Пользователи"
 
 
 @admin.register(TeacherProfile)
 class TeacherProfileAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "experience_years", "rating_avg", "rating_count")
-    search_fields = ("user__email", "user__first_name", "user__last_name")
+    list_display = ("id", "user", "experience_years", "rating_preview")
+    search_fields = ("user__email", "user__username", "user__first_name", "user__last_name")
+    ordering = ("id",)
 
-
-@admin.register(FavoriteTeacher)
-class FavoriteTeacherAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "teacher", "created_at")
+    @admin.display(description="Rating")
+    def rating_preview(self, obj):
+        return round(float(obj.reviews.aggregate(value=Avg("rating"))["value"] or 0), 2)
 
 
 @admin.register(TeacherReview)
 class TeacherReviewAdmin(admin.ModelAdmin):
-    list_display = ("id", "teacher", "author_user", "lesson", "rating", "created_at")
-    search_fields = ("teacher__user__email", "author_user__email")
+    list_display = ("id", "teacher", "user", "lesson", "rating", "created_at")
+    list_filter = ("rating", "created_at")
+    search_fields = ("teacher__user__email", "user__email", "text")
+    ordering = ("-created_at",)
+
+
+class ReadOnlyAdmin(admin.ModelAdmin):
+    actions = None
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(UserFlagAdminView)
+class UserFlagAdmin(admin.ModelAdmin):
+    list_display = ("user", "name", "value")
+    list_filter = ("value",)
+    search_fields = ("user__email", "user__username", "name")
+    ordering = ("user", "name")
+    readonly_fields = ("user", "name", "value")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(UserSkillAdminView)
+class UserSkillAdmin(ReadOnlyAdmin):
+    list_display = ("user", "dance_style", "level")
+    list_filter = ("level", "dance_style")
+    search_fields = ("user__email", "user__username", "dance_style__name")
+    ordering = ("user", "dance_style")
+    readonly_fields = ("user", "dance_style", "level")
+
+
+@admin.register(FavoriteTeacherAdminView)
+class FavoriteTeacherAdmin(ReadOnlyAdmin):
+    list_display = ("user", "teacher")
+    search_fields = ("user__email", "teacher__user__email", "teacher__user__first_name", "teacher__user__last_name")
+    ordering = ("user", "teacher")
+    readonly_fields = ("user", "teacher")

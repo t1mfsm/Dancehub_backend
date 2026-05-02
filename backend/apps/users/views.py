@@ -1,657 +1,569 @@
-from django.db.models import Q
-from django.utils import timezone
-from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
-from rest_framework import generics, permissions, status
-from rest_framework.authentication import SessionAuthentication
+from django.contrib.auth.hashers import check_password
+from django.db import connection
+from django.db import transaction
+from django.db.models import Avg, Count, Q
+from drf_spectacular.utils import extend_schema
+from rest_framework import permissions, status
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.authentication import JWTAuthentication
-from rest_framework_simplejwt.serializers import TokenRefreshSerializer
-from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework_simplejwt.views import TokenRefreshView
 
-from apps.courses.models import Course, Enrollment, FavoriteCourse, Lesson
-from apps.courses.serializers import CourseDetailSerializer
+from apps.common.choices import CourseStatus, DanceLevel, EnrollmentStatus, UserRole
+from apps.common.files import save_uploaded_file
+from apps.common.utils import build_full_name, course_lifecycle_status
+from apps.courses.models import Course, DanceStyle, Enrollment, FavoriteCourse
+from apps.courses.serializers import serialize_course_detail
+from apps.courses.serializers import EnrollmentRequestSerializer
+from apps.users.models import TeacherProfile, User
+from config.authentication import build_tokens_for_user, decode_token
 
-from .models import FavoriteTeacher, TeacherProfile, TeacherReview, User, UserFlag, UserSkill
 from .serializers import (
-    ChangePasswordSerializer,
-    CourseDashboardItemSerializer,
-    CourseRecommendationSerializer,
-    FavoritesResponseSerializer,
-    LessonDashboardItemSerializer,
     LoginSerializer,
     LogoutSerializer,
-    MeSerializer,
-    MeUpdateSerializer,
-    MyCourseSerializer,
+    RefreshSerializer,
     RegisterSerializer,
-    StudentDashboardSerializer,
-    SurveySubmitSerializer,
-    TeacherCourseListSerializer,
-    TeacherDashboardSerializer,
-    TeacherDetailSerializer,
-    TeacherListSerializer,
     TeacherProfileUpdateSerializer,
-    TeacherReviewCreateSerializer,
-    TeacherReviewSerializer,
     UserFlagSerializer,
-    UserSkillSerializer,
-    UserSkillWriteItemSerializer,
+    UserPreferencesSerializer,
+    UserSkillItemSerializer,
+    UserUpdateSerializer,
+    serialize_user,
+    update_user_preferences_record,
 )
 
 
-def _enrollment_queryset_with_course_detail():
-    return Enrollment.objects.select_related(
-        "course__teacher__user",
-        "course__dance_style",
-        "course__studio__city",
-    ).prefetch_related(
-        "course__schedule_rules",
-        "course__enrollments",
-    )
+class IsAuthenticated(permissions.BasePermission):
+    def has_permission(self, request, view):
+        return bool(request.user and getattr(request.user, "is_authenticated", False))
 
 
-# ---------------------------------------------------------------------------
-# Auth
-# ---------------------------------------------------------------------------
+def require_authenticated_user(request) -> User:
+    user = request.user
+    if not user or not getattr(user, "is_authenticated", False):
+        raise PermissionDenied("Authentication required.")
+    return user
 
-@extend_schema(tags=["Auth"], summary="Регистрация", request=RegisterSerializer)
+
+def get_current_teacher(request) -> TeacherProfile:
+    user = require_authenticated_user(request)
+    teacher = TeacherProfile.objects.filter(user=user).first()
+    if teacher is None:
+        raise ValidationError({"detail": "User does not have a teacher profile."})
+    return teacher
+
+
+def user_with_rating(user: User):
+    teacher = TeacherProfile.objects.filter(user=user).first()
+    rating = 0
+    if teacher:
+        rating = teacher.reviews.aggregate(value=Avg("rating"))["value"] or 0
+    return teacher, rating
+
+
+def apply_user_preferences(user: User, data: dict, *, mark_survey_completed: bool = False) -> User:
+    from apps.locations.models import City
+
+    updates = {}
+    if "city" in data:
+        city_name = (data.get("city") or "").strip()
+        city = City.objects.filter(name=city_name).first() if city_name else None
+        updates["city_id"] = city.id if city else None
+    if "level" in data:
+        updates["dance_level"] = None if data["level"] == "any" else data["level"]
+    if "preferred_weekdays" in data:
+        updates["preferred_weekdays"] = data["preferred_weekdays"]
+    if "preferred_time_from" in data:
+        updates["preferred_time_from"] = data["preferred_time_from"]
+    if "preferred_time_to" in data:
+        updates["preferred_time_to"] = data["preferred_time_to"]
+    if "price_from" in data:
+        updates["price_from"] = data["price_from"]
+    if "price_to" in data:
+        updates["price_to"] = data["price_to"]
+    if "preferred_dance_styles" in data:
+        updates["preferred_dance_styles"] = data["preferred_dance_styles"]
+    if "role" in data:
+        updates["role"] = data["role"]
+    if mark_survey_completed:
+        updates["survey_completed"] = True
+    return update_user_preferences_record(user.id, **updates)
+
+
 class RegisterAPIView(APIView):
-    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
 
+    @extend_schema(request=RegisterSerializer)
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-        refresh = RefreshToken.for_user(user)
-        access = str(refresh.access_token)
-        return Response(
-            {
-                "user": MeSerializer(user, context={"request": request}).data,
-                "token": access,
-                "access": access,
-                "refresh": str(refresh),
-            },
-            status=status.HTTP_201_CREATED,
-        )
+        tokens = build_tokens_for_user(user)
+        return Response({"user": serialize_user(user, request=request), **tokens})
 
 
-@extend_schema(tags=["Auth"], summary="Логин", request=LoginSerializer)
 class LoginAPIView(APIView):
-    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
 
+    @extend_schema(request=LoginSerializer)
     def post(self, request):
-        serializer = LoginSerializer(data=request.data, context={"request": request})
+        serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = serializer.validated_data["user"]
-        refresh = RefreshToken.for_user(user)
-        access = str(refresh.access_token)
-        return Response(
-            {
-                "user": MeSerializer(user, context={"request": request}).data,
-                "token": access,
-                "access": access,
-                "refresh": str(refresh),
-            }
-        )
+        user = User.objects.filter(email=serializer.validated_data["email"]).select_related("city").first()
+        if user is None or not check_password(serializer.validated_data["password"], user.password_hash):
+            raise ValidationError({"detail": "Invalid email or password."})
+        teacher, rating = user_with_rating(user)
+        tokens = build_tokens_for_user(user)
+        return Response({"user": serialize_user(user, request=request, teacher=teacher, teacher_rating=rating), **tokens})
 
 
-@extend_schema(tags=["Auth"], summary="Обновить access token", request=TokenRefreshSerializer)
-class RefreshTokenAPIView(TokenRefreshView):
-    permission_classes = [permissions.AllowAny]
+class RefreshTokenAPIView(APIView):
+    authentication_classes = []
+
+    @extend_schema(request=RefreshSerializer)
+    def post(self, request):
+        serializer = RefreshSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payload = decode_token(serializer.validated_data["refresh"], expected_type="refresh")
+        user = User.objects.filter(id=payload["sub"]).first()
+        if user is None:
+            raise ValidationError({"detail": "User not found."})
+        return Response(build_tokens_for_user(user))
 
 
-@extend_schema(tags=["Auth"], summary="Выход из системы", request=LogoutSerializer)
 class LogoutAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
+    authentication_classes = []
 
+    @extend_schema(request=LogoutSerializer)
     def post(self, request):
         serializer = LogoutSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        try:
-            token = RefreshToken(serializer.validated_data["refresh"])
-            token.blacklist()
-        except Exception as exc:
-            raise ValidationError({"refresh": f"Не удалось завершить сессию: {exc}"}) from exc
-        return Response({"detail": "Выход выполнен."}, status=status.HTTP_200_OK)
-
-
-@extend_schema(tags=["Auth"], summary="Сменить пароль", request=ChangePasswordSerializer)
-class ChangePasswordAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def post(self, request):
-        serializer = ChangePasswordSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = request.user
-        if not user.check_password(serializer.validated_data["current_password"]):
-            raise ValidationError({"current_password": "Текущий пароль введён неверно."})
-        user.set_password(serializer.validated_data["new_password"])
-        user.save(update_fields=["password"])
-        return Response({"detail": "Пароль обновлён."}, status=status.HTTP_200_OK)
-
-
-# ---------------------------------------------------------------------------
-# User profile
-# ---------------------------------------------------------------------------
-
-@extend_schema_view(
-    get=extend_schema(tags=["Users"], summary="Текущий пользователь"),
-    patch=extend_schema(tags=["Users"], summary="Обновить профиль"),
-    put=extend_schema(tags=["Users"], summary="Полностью обновить профиль"),
-)
-class MeAPIView(generics.RetrieveAPIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def get_serializer_class(self):
-        if self.request.method in {"PATCH", "PUT"}:
-            return MeUpdateSerializer
-        return MeSerializer
-
-    def get_object(self):
-        return self.request.user
-
-    def patch(self, request, *args, **kwargs):
-        user = self.get_object()
-        serializer = MeUpdateSerializer(user, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(MeSerializer(user, context=self.get_serializer_context()).data)
-
-    def put(self, request, *args, **kwargs):
-        user = self.get_object()
-        serializer = MeUpdateSerializer(user, data=request.data, partial=False)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(MeSerializer(user, context=self.get_serializer_context()).data)
-
-
-@extend_schema(tags=["Users"], summary="Сохранить результаты опроса", request=SurveySubmitSerializer)
-class UserSurveyAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def patch(self, request):
-        serializer = SurveySubmitSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        serializer.update(request.user, serializer.validated_data)
-        return Response({"detail": "OK"})
-
-
-@extend_schema(tags=["Users"], summary="Обновить предпочтения пользователя", request=SurveySubmitSerializer)
-class UserPreferenceAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def patch(self, request):
-        serializer = SurveySubmitSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        serializer.update(request.user, serializer.validated_data)
-        return Response({"detail": "updated"})
-
-
-# ---------------------------------------------------------------------------
-# Skills
-# ---------------------------------------------------------------------------
-
-@extend_schema(
-    tags=["Users"],
-    summary="Сохранить навыки пользователя",
-    request=UserSkillWriteItemSerializer(many=True),
-)
-class UserSkillAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def get(self, request):
-        skills = UserSkill.objects.select_related("dance_style").filter(user=request.user)
-        return Response(UserSkillSerializer(skills, many=True).data)
-
-    def put(self, request):
-        serializer = UserSkillWriteItemSerializer(data=request.data, many=True)
-        serializer.is_valid(raise_exception=True)
-        UserSkill.objects.filter(user=request.user).delete()
-        from apps.courses.models import DanceStyle
-        UserSkill.objects.bulk_create([
-            UserSkill(
-                user=request.user,
-                dance_style=DanceStyle.objects.get(id=item["dance_style_id"]),
-                level=item["level"],
-            )
-            for item in serializer.validated_data
-        ])
-        return Response({"detail": "skills saved"})
-
-
-# ---------------------------------------------------------------------------
-# Flags
-# ---------------------------------------------------------------------------
-
-@extend_schema(tags=["Users"], summary="Установить пользовательский флаг", request=UserFlagSerializer)
-class UserFlagAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def post(self, request):
-        serializer = UserFlagSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        UserFlag.objects.update_or_create(
-            user=request.user,
-            name=serializer.validated_data["name"],
-            defaults={"value": serializer.validated_data["value"]},
-        )
         return Response({"detail": "ok"})
 
 
-# ---------------------------------------------------------------------------
-# Teachers
-# ---------------------------------------------------------------------------
+class MeAPIView(APIView):
+    permission_classes = [IsAuthenticated]
 
-@extend_schema_view(
-    get=extend_schema(
-        tags=["Teachers"],
-        summary="Список преподавателей",
-        parameters=[
-            OpenApiParameter(name="city", type=str),
-            OpenApiParameter(name="style", type=str),
-            OpenApiParameter(name="search", type=str),
-        ],
-    )
-)
-class TeacherListAPIView(generics.ListAPIView):
-    serializer_class = TeacherListSerializer
+    def get(self, request):
+        user = require_authenticated_user(request)
+        teacher, rating = user_with_rating(user)
+        return Response(serialize_user(user, request=request, teacher=teacher, teacher_rating=rating))
 
-    def get_queryset(self):
-        queryset = TeacherProfile.objects.select_related("user__city").order_by(
-            "user__last_name", "user__first_name"
+    @extend_schema(request=UserUpdateSerializer)
+    def patch(self, request):
+        user = require_authenticated_user(request)
+        serializer = UserUpdateSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        if "username" in data and data["username"] != user.username and User.objects.exclude(id=user.id).filter(username=data["username"]).exists():
+            raise ValidationError({"username": ["A user with this username already exists."]})
+        if "city" in data:
+            from apps.locations.models import City
+
+            city_name = (data.get("city") or "").strip()
+            user.city = City.objects.filter(name=city_name).first() if city_name else None
+        for field in ["username", "first_name", "middle_name", "last_name", "phone", "survey_completed", "dance_level", "role"]:
+            if field in data:
+                setattr(user, field, data[field])
+        if "avatar_file" in data:
+            user.avatar = save_uploaded_file(data["avatar_file"], "avatars")
+        user.save(
+            update_fields=[
+                "username",
+                "first_name",
+                "middle_name",
+                "last_name",
+                "phone",
+                "survey_completed",
+                "avatar",
+                "city",
+                "dance_level",
+                "role",
+            ]
         )
-        city = self.request.query_params.get("city")
-        style = self.request.query_params.get("style")
-        search = self.request.query_params.get("search")
+        teacher, rating = user_with_rating(user)
+        return Response(serialize_user(user, request=request, teacher=teacher, teacher_rating=rating))
 
-        if city:
-            queryset = queryset.filter(user__city__name__icontains=city)
-        if style:
-            queryset = queryset.filter(
-                Q(specializations__icontains=style)
+
+class UserSurveyAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=UserPreferencesSerializer)
+    def patch(self, request):
+        user = require_authenticated_user(request)
+        serializer = UserPreferencesSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        user = apply_user_preferences(user, serializer.validated_data, mark_survey_completed=True)
+        teacher, rating = user_with_rating(user)
+        return Response(serialize_user(user, request=request, teacher=teacher, teacher_rating=rating))
+
+
+class UserPreferenceAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=UserPreferencesSerializer)
+    def patch(self, request):
+        user = require_authenticated_user(request)
+        serializer = UserPreferencesSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        user = apply_user_preferences(user, serializer.validated_data)
+        teacher, rating = user_with_rating(user)
+        return Response(serialize_user(user, request=request, teacher=teacher, teacher_rating=rating))
+
+
+class UserSkillAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=UserSkillItemSerializer(many=True))
+    def put(self, request):
+        user = require_authenticated_user(request)
+        serializer = UserSkillItemSerializer(data=request.data, many=True)
+        serializer.is_valid(raise_exception=True)
+        with transaction.atomic(), connection.cursor() as cursor:
+            cursor.execute("DELETE FROM user_skills WHERE user_id = %s", [user.id])
+            for row in serializer.validated_data:
+                level = DanceLevel.BEGINNER if row["level"] == "any" else row["level"]
+                cursor.execute(
+                    "INSERT INTO user_skills (user_id, dance_style_id, level) VALUES (%s, %s, %s)",
+                    [user.id, row["dance_style_id"], level],
+                )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class UserFlagAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=UserFlagSerializer)
+    def post(self, request):
+        user = require_authenticated_user(request)
+        serializer = UserFlagSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO user_flags (user_id, name, value)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (user_id, name)
+                DO UPDATE SET value = EXCLUDED.value
+                """,
+                [user.id, serializer.validated_data["name"], serializer.validated_data["value"]],
             )
+        return Response(serializer.validated_data)
+
+
+class TeacherListAPIView(APIView):
+    def get(self, request):
+        teachers = TeacherProfile.objects.select_related("user__city").annotate(
+            rating_avg=Avg("reviews__rating"),
+            rating_count=Count("reviews"),
+        )
+        city = request.query_params.get("city")
+        search = request.query_params.get("search")
+        style = request.query_params.get("style")
+        if city:
+            teachers = teachers.filter(user__city__name__iexact=city)
         if search:
-            queryset = queryset.filter(
+            teachers = teachers.filter(
                 Q(user__first_name__icontains=search)
                 | Q(user__last_name__icontains=search)
                 | Q(user__email__icontains=search)
+                | Q(user__username__icontains=search)
             )
-        return queryset.distinct()
+        if style:
+            teachers = teachers.filter(
+                Q(courses__dance_style__slug__iexact=style) | Q(courses__dance_style__name__iexact=style)
+            )
+        teachers = teachers.distinct().order_by("user__last_name", "user__first_name")
+        payload = []
+        for teacher in teachers:
+            payload.append(
+                {
+                    "id": teacher.id,
+                    "full_name": build_full_name(teacher.user.last_name, teacher.user.first_name, teacher.user.middle_name)
+                    or teacher.user.email,
+                    "bio": teacher.bio or "",
+                    "experience_years": teacher.experience_years,
+                    "rating_avg": round(float(teacher.rating_avg or 0), 2),
+                    "rating_count": teacher.rating_count,
+                    "city": teacher.user.city.name if teacher.user.city else "",
+                }
+            )
+        return Response(payload)
 
-    @extend_schema(tags=["Teachers"], summary="Создать профиль преподавателя")
-    def post(self, request, *args, **kwargs):
-        if not request.user.is_authenticated:
-            raise PermissionDenied("Требуется авторизация.")
-        if request.user.role != "teacher":
-            raise ValidationError({"detail": "Профиль преподавателя доступен только для роли teacher."})
-        teacher, _ = TeacherProfile.objects.get_or_create(user=request.user)
-        return Response(TeacherDetailSerializer(teacher).data, status=status.HTTP_201_CREATED)
-
-
-@extend_schema_view(
-    get=extend_schema(tags=["Teachers"], summary="Детальная информация о преподавателе"),
-    patch=extend_schema(tags=["Teachers"], summary="Обновить профиль преподавателя", request=TeacherProfileUpdateSerializer),
-    put=extend_schema(tags=["Teachers"], summary="Полностью обновить профиль преподавателя", request=TeacherProfileUpdateSerializer),
-)
-class TeacherRetrieveAPIView(generics.RetrieveAPIView):
-    serializer_class = TeacherDetailSerializer
-    lookup_field = "id"
-
-    def get_queryset(self):
-        return TeacherProfile.objects.select_related("user__city").prefetch_related("reviews__author_user", "courses__dance_style")
-
-    def patch(self, request, *args, **kwargs):
-        teacher = self._get_or_create_profile(request)
-        serializer = TeacherProfileUpdateSerializer(teacher, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        teacher.refresh_from_db()
-        return Response(TeacherDetailSerializer(teacher).data)
-
-    def put(self, request, *args, **kwargs):
-        teacher = self._get_or_create_profile(request)
-        serializer = TeacherProfileUpdateSerializer(teacher, data=request.data, partial=False)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        teacher.refresh_from_db()
-        return Response(TeacherDetailSerializer(teacher).data)
-
-    def _get_or_create_profile(self, request) -> TeacherProfile:
-        if request.user.role != "teacher":
-            raise ValidationError({"detail": "Профиль преподавателя доступен только для роли teacher."})
-        teacher, _ = TeacherProfile.objects.get_or_create(user=request.user)
-        return teacher
+    @extend_schema(request=None)
+    def post(self, request):
+        user = require_authenticated_user(request)
+        teacher, _ = TeacherProfile.objects.get_or_create(user=user, defaults={"bio": "", "experience_years": 0})
+        if user.role != UserRole.TEACHER:
+            user.role = UserRole.TEACHER
+            user.save(update_fields=["role"])
+        return Response({"id": teacher.id}, status=status.HTTP_201_CREATED)
 
 
-@extend_schema_view(
-    get=extend_schema(
-        tags=["Teachers"],
-        summary="Курсы преподавателя",
-        parameters=[OpenApiParameter(name="status", type=str)],
-    )
-)
-class TeacherCourseListAPIView(generics.ListAPIView):
-    serializer_class = TeacherCourseListSerializer
-
-    def get_queryset(self):
-        queryset = Course.objects.select_related("dance_style", "studio").filter(
-            teacher_id=self.kwargs["id"]
-        ).order_by("date_from", "id")
-        status_param = self.request.query_params.get("status")
-        if status_param:
-            queryset = queryset.filter(status=status_param)
-        return queryset
-
-    def list(self, request, *args, **kwargs):
-        queryset = self.filter_queryset(self.get_queryset())
-        serializer = TeacherCourseListSerializer(queryset, many=True)
-        return Response(serializer.data)
-
-
-@extend_schema(
-    tags=["Teachers"],
-    summary="Оставить отзыв о преподавателе",
-    request=TeacherReviewCreateSerializer,
-)
-class TeacherReviewCreateAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def post(self, request, teacher_id: int):
-        generics.get_object_or_404(TeacherProfile, id=teacher_id)
-        serializer = TeacherReviewCreateSerializer(data=request.data, context={"request": request})
-        serializer.is_valid(raise_exception=True)
-        review = TeacherReview.objects.create(
-            author_user=request.user,
-            teacher=serializer.validated_data["teacher"],
-            lesson=serializer.validated_data["lesson"],
-            rating=serializer.validated_data["rating"],
-            text=serializer.validated_data.get("text", ""),
+class TeacherRetrieveAPIView(APIView):
+    def get(self, request, id: int):
+        teacher = TeacherProfile.objects.select_related("user__city").filter(id=id).first()
+        if teacher is None:
+            raise ValidationError({"detail": "Teacher not found."})
+        reviews = teacher.reviews.select_related("user").order_by("-created_at")
+        courses = teacher.courses.select_related("dance_style", "studio__city").prefetch_related("schedule_rows").annotate(
+            active_enrollments=Count("enrollments", filter=Q(enrollments__status=EnrollmentStatus.ACTIVE))
         )
-        return Response(TeacherReviewSerializer(review).data, status=status.HTTP_201_CREATED)
+        rating = reviews.aggregate(value=Avg("rating"))["value"] or 0
+        payload = {
+            "id": teacher.id,
+            "user_id": teacher.user_id,
+            "full_name": build_full_name(teacher.user.last_name, teacher.user.first_name, teacher.user.middle_name)
+            or teacher.user.email,
+            "name": build_full_name(teacher.user.first_name, teacher.user.last_name) or teacher.user.email,
+            "email": teacher.user.email,
+            "avatar": teacher.user.avatar or "",
+            "city": teacher.user.city.name if teacher.user.city else "",
+            "bio": teacher.bio or "",
+            "images": teacher.images or [],
+            "experience": teacher.experience_years,
+            "rating": round(float(rating), 2),
+            "specializations": teacher.specializations or [],
+            "achievements": teacher.achievements or [],
+            "reviews": [
+                {
+                    "id": review.id,
+                    "author_name": build_full_name(review.user.first_name, review.user.last_name) or review.user.email,
+                    "rating": review.rating,
+                    "text": review.text,
+                    "created_at": review.created_at.isoformat(),
+                }
+                for review in reviews
+            ],
+            "courses": [
+                {
+                    "id": course.id,
+                    "name": course.name,
+                    "dance_style": course.dance_style.name,
+                    "level": course.level,
+                    "price": course.price,
+                    "date_from": course.date_from.isoformat(),
+                    "date_to": course.date_to.isoformat(),
+                    "status": course_lifecycle_status(course.status, course.date_from, course.date_to),
+                    "studio": course.studio.name,
+                }
+                for course in courses
+            ],
+        }
+        return Response(payload)
 
-
-# ---------------------------------------------------------------------------
-# Favorites
-# ---------------------------------------------------------------------------
-
-@extend_schema_view(
-    get=extend_schema(tags=["Users"], summary="Избранные курсы и преподаватели")
-)
-class FavoritesAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def get(self, request):
-        fav_courses = FavoriteCourse.objects.select_related("course").filter(user=request.user)
-        fav_teachers = FavoriteTeacher.objects.select_related("teacher__user").filter(user=request.user)
+    @extend_schema(request=TeacherProfileUpdateSerializer)
+    def put(self, request, id: int):
+        user = require_authenticated_user(request)
+        teacher = TeacherProfile.objects.filter(user=user).first()
+        if teacher is None:
+            teacher = TeacherProfile.objects.create(user=user, bio="", experience_years=0)
+        if id not in (0, teacher.id):
+            raise PermissionDenied("You can update only your teacher profile.")
+        serializer = TeacherProfileUpdateSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        if "bio" in data:
+            teacher.bio = data["bio"]
+        if "experience" in data:
+            teacher.experience_years = data["experience"]
+        if "achievements" in data:
+            teacher.achievements = data["achievements"]
+        if "specializations" in data:
+            teacher.specializations = data["specializations"]
+        if "images" in data:
+            teacher.images = serializer.normalize_images("teacher-images")
+        teacher.save()
+        if user.role != UserRole.TEACHER:
+            user.role = UserRole.TEACHER
+            user.save(update_fields=["role"])
+        rating = teacher.reviews.aggregate(value=Avg("rating"))["value"] or 0
         return Response(
             {
-                "courses": [
-                    {"course_id": f.course.id, "course_name": f.course.name}
-                    for f in fav_courses.order_by("-created_at")
-                ],
-                "teachers": [
-                    {
-                        "teacher_id": f.teacher.id,
-                        "teacher_name": f.teacher.user.get_full_name() or f.teacher.user.email,
-                    }
-                    for f in fav_teachers.order_by("-created_at")
-                ],
+                "bio": teacher.bio or "",
+                "images": teacher.images or [],
+                "achievements": teacher.achievements or [],
+                "experience": teacher.experience_years,
+                "specializations": teacher.specializations or [],
+                "rating": round(float(rating), 2),
             }
         )
 
 
-@extend_schema_view(
-    post=extend_schema(tags=["Users"], summary="Добавить курс в избранное"),
-    delete=extend_schema(tags=["Users"], summary="Удалить курс из избранного"),
-)
-class FavoriteCourseAddAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
+class MyTeachingCourseListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
 
-    def post(self, request, course_id: int):
-        course = generics.get_object_or_404(Course, id=course_id)
-        _, created = FavoriteCourse.objects.get_or_create(user=request.user, course=course)
+    def get(self, request):
+        teacher = get_current_teacher(request)
+        courses = (
+            Course.objects.filter(teacher=teacher)
+            .select_related("teacher__user", "dance_style", "studio__city")
+            .prefetch_related("schedule_rows")
+            .annotate(active_enrollments=Count("enrollments", filter=Q(enrollments__status=EnrollmentStatus.ACTIVE)))
+            .order_by("-id")
+        )
         return Response(
-            {"course_id": course.id, "course_name": course.name},
-            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+            [
+                serialize_course_detail(course, request=request, spots_left=course.capacity - course.active_enrollments)
+                for course in courses
+            ]
         )
 
+
+class TeacherCourseListAPIView(APIView):
+    def get(self, request, id: int):
+        teacher = TeacherProfile.objects.filter(id=id).first()
+        if teacher is None:
+            raise ValidationError({"detail": "Teacher not found."})
+        courses = (
+            Course.objects.filter(teacher=teacher)
+            .select_related("teacher__user", "dance_style", "studio__city")
+            .prefetch_related("schedule_rows")
+            .annotate(active_enrollments=Count("enrollments", filter=Q(enrollments__status=EnrollmentStatus.ACTIVE)))
+            .order_by("-id")
+        )
+        status_filter = request.query_params.get("status")
+        if status_filter:
+            courses = [
+                course
+                for course in courses
+                if course_lifecycle_status(course.status, course.date_from, course.date_to) == status_filter
+            ]
+        return Response(
+            [
+                {
+                    "id": course.id,
+                    "name": course.name,
+                    "dance_style": course.dance_style.name,
+                    "level": course.level,
+                    "price": course.price,
+                    "date_from": course.date_from.isoformat(),
+                    "date_to": course.date_to.isoformat(),
+                    "status": course_lifecycle_status(course.status, course.date_from, course.date_to),
+                    "studio": course.studio.name,
+                }
+                for course in courses
+            ]
+        )
+
+
+class FavoriteCourseAddAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, course_id: int):
+        user = require_authenticated_user(request)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO favorite_courses (user_id, course_id)
+                VALUES (%s, %s)
+                ON CONFLICT (user_id, course_id) DO NOTHING
+                """,
+                [user.id, course_id],
+            )
+        return Response({"detail": "ok"})
+
     def delete(self, request, course_id: int):
-        deleted, _ = FavoriteCourse.objects.filter(user=request.user, course_id=course_id).delete()
-        if not deleted:
-            return Response({"detail": "Курс не найден в избранном."}, status=status.HTTP_404_NOT_FOUND)
+        user = require_authenticated_user(request)
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM favorite_courses WHERE user_id = %s AND course_id = %s", [user.id, course_id])
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-@extend_schema_view(
-    post=extend_schema(tags=["Users"], summary="Добавить преподавателя в избранное"),
-    delete=extend_schema(tags=["Users"], summary="Удалить преподавателя из избранного"),
-)
 class FavoriteTeacherAddAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, teacher_id: int):
-        teacher = generics.get_object_or_404(TeacherProfile, id=teacher_id)
-        _, created = FavoriteTeacher.objects.get_or_create(user=request.user, teacher=teacher)
-        return Response(
-            {"teacher_id": teacher.id, "teacher_name": teacher.user.get_full_name() or teacher.user.email},
-            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
-        )
+        user = require_authenticated_user(request)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO favorite_teachers (user_id, teacher_id)
+                VALUES (%s, %s)
+                ON CONFLICT (user_id, teacher_id) DO NOTHING
+                """,
+                [user.id, teacher_id],
+            )
+        return Response({"detail": "ok"})
 
     def delete(self, request, teacher_id: int):
-        deleted, _ = FavoriteTeacher.objects.filter(user=request.user, teacher_id=teacher_id).delete()
-        if not deleted:
-            return Response({"detail": "Преподаватель не найден в избранном."}, status=status.HTTP_404_NOT_FOUND)
+        user = require_authenticated_user(request)
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM favorite_teachers WHERE user_id = %s AND teacher_id = %s", [user.id, teacher_id])
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-# ---------------------------------------------------------------------------
-# Enrollments / My courses
-# ---------------------------------------------------------------------------
+class EnrollmentListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
 
-@extend_schema_view(
-    get=extend_schema(tags=["Users"], summary="Курсы по записям пользователя", responses=CourseDetailSerializer(many=True))
-)
-class EnrollmentListAPIView(generics.ListAPIView):
-    serializer_class = CourseDetailSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-    pagination_class = None
-
-    def get_queryset(self):
-        return (
-            _enrollment_queryset_with_course_detail()
-            .filter(user=self.request.user)
-            .exclude(status="cancelled")
-            .order_by("-created_at")
+    def get(self, request):
+        user = require_authenticated_user(request)
+        courses = (
+            Course.objects.filter(enrollments__user=user, enrollments__status=EnrollmentStatus.ACTIVE)
+            .select_related("teacher__user", "dance_style", "studio__city")
+            .prefetch_related("schedule_rows")
+            .annotate(active_enrollments=Count("enrollments", filter=Q(enrollments__status=EnrollmentStatus.ACTIVE)))
+            .distinct()
+            .order_by("-id")
+        )
+        return Response(
+            [
+                serialize_course_detail(course, request=request, spots_left=course.capacity - course.active_enrollments)
+                for course in courses
+            ]
         )
 
-    def list(self, request, *args, **kwargs):
-        queryset = self.filter_queryset(self.get_queryset())
-        courses = [e.course for e in queryset]
-        return Response(CourseDetailSerializer(courses, many=True, context={"request": request}).data)
+
+class MyCourseListAPIView(EnrollmentListAPIView):
+    pass
 
 
-@extend_schema_view(
-    get=extend_schema(tags=["Users"], summary="Короткий список моих записей")
-)
-class MyCourseListAPIView(generics.ListAPIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def get_queryset(self):
-        return Enrollment.objects.filter(user=self.request.user).select_related("course").order_by("-created_at")
-
-    def list(self, request, *args, **kwargs):
-        queryset = self.get_queryset()
-        return Response(MyCourseSerializer(queryset, many=True).data)
-
-
-@extend_schema_view(
-    get=extend_schema(
-        tags=["Teachers"],
-        summary="Мои курсы как преподавателя",
-        parameters=[OpenApiParameter(name="status", type=str)],
-        responses=CourseDetailSerializer(many=True),
-    )
-)
-class MyTeachingCourseListAPIView(generics.ListAPIView):
-    serializer_class = CourseDetailSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-    pagination_class = None
-
-    def get_queryset(self):
-        queryset = Course.objects.select_related("teacher__user", "dance_style", "studio__city").prefetch_related(
-            "schedule_rules", "enrollments"
-        ).filter(teacher__user=self.request.user).order_by("date_from", "id")
-        status_param = self.request.query_params.get("status")
-        if status_param:
-            queryset = queryset.filter(status=status_param)
-        return queryset
-
-
-@extend_schema_view(
-    post=extend_schema(tags=["Users"], summary="Записаться на курс"),
-    delete=extend_schema(tags=["Users"], summary="Отменить запись на курс"),
-)
 class CourseEnrollAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
 
+    @extend_schema(request=EnrollmentRequestSerializer)
     def post(self, request, course_id: int):
-        course = generics.get_object_or_404(Course, id=course_id)
-        enrollment, created = Enrollment.objects.get_or_create(
-            user=request.user,
-            course=course,
-            defaults={"enrolled_at": timezone.now().date(), "status": "active", "paid": False},
+        user = require_authenticated_user(request)
+        serializer = EnrollmentRequestSerializer(data=request.data or {})
+        serializer.is_valid(raise_exception=True)
+        course = Course.objects.filter(id=course_id).annotate(
+            active_enrollments=Count("enrollments", filter=Q(enrollments__status=EnrollmentStatus.ACTIVE))
+        ).first()
+        if course is None:
+            raise ValidationError({"detail": "Course not found."})
+        lifecycle_status = course_lifecycle_status(course.status, course.date_from, course.date_to)
+        if lifecycle_status != CourseStatus.PUBLISHED:
+            raise ValidationError({"detail": "Enrollment is allowed only for published courses."})
+        if course.teacher.user_id == user.id:
+            raise ValidationError({"detail": "Teacher cannot enroll in own course."})
+        enrollment = Enrollment.objects.filter(user=user, course=course).first()
+        if enrollment is None:
+            if course.active_enrollments >= course.capacity:
+                raise ValidationError({"detail": "No spots left."})
+            enrollment = Enrollment.objects.create(
+                user=user,
+                course=course,
+                status=EnrollmentStatus.ACTIVE,
+                paid=serializer.validated_data["paid"],
+            )
+        else:
+            enrollment.status = EnrollmentStatus.ACTIVE
+            enrollment.paid = serializer.validated_data["paid"]
+            enrollment.save(update_fields=["status", "paid"])
+        return Response(
+            {
+                "id": enrollment.id,
+                "user_id": enrollment.user_id,
+                "course_id": enrollment.course_id,
+                "status": enrollment.status,
+                "enrolled_at": enrollment.enrolled_at.isoformat(),
+                "paid": enrollment.paid,
+            }
         )
-        if not created and enrollment.status == "cancelled":
-            enrollment.status = "active"
-            enrollment.cancelled_at = None
-            enrollment.save(update_fields=["status", "cancelled_at", "updated_at"])
-        enrollment = _enrollment_queryset_with_course_detail().get(pk=enrollment.pk)
-        data = CourseDetailSerializer(enrollment.course, context={"request": request}).data
-        return Response(data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
     def delete(self, request, course_id: int):
-        enrollment = Enrollment.objects.filter(user=request.user, course_id=course_id).first()
-        if not enrollment:
-            return Response({"detail": "Запись не найдена."}, status=status.HTTP_404_NOT_FOUND)
-        enrollment.status = "cancelled"
-        enrollment.cancelled_at = timezone.now()
-        enrollment.save(update_fields=["status", "cancelled_at", "updated_at"])
+        user = require_authenticated_user(request)
+        enrollment = Enrollment.objects.filter(user=user, course_id=course_id).first()
+        if enrollment:
+            enrollment.status = EnrollmentStatus.CANCELLED
+            enrollment.save(update_fields=["status"])
         return Response(status=status.HTTP_204_NO_CONTENT)
-
-
-# ---------------------------------------------------------------------------
-# Recommendations
-# ---------------------------------------------------------------------------
-
-@extend_schema_view(
-    get=extend_schema(tags=["Recommendations"], summary="Рекомендованные курсы")
-)
-class RecommendedCourseListAPIView(generics.ListAPIView):
-    serializer_class = CourseRecommendationSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def get_queryset(self):
-        user = self.request.user
-        enrolled_ids = set(
-            user.enrollments.filter(status__in=["active", "pending", "completed"]).values_list("course_id", flat=True)
-        )
-        queryset = Course.objects.select_related("teacher__user", "dance_style", "studio__city").filter(
-            status="published"
-        ).exclude(id__in=enrolled_ids)
-        if user.dance_level:
-            queryset = queryset.filter(level=user.dance_level)
-        return queryset.order_by("-teacher__rating_avg", "date_from", "id")[:10]
-
-
-# ---------------------------------------------------------------------------
-# Dashboards
-# ---------------------------------------------------------------------------
-
-@extend_schema_view(
-    get=extend_schema(tags=["Users"], summary="Дашборд студента")
-)
-class StudentDashboardAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def get(self, request):
-        user = request.user
-        today = timezone.localdate()
-
-        enrolled_course_ids = Enrollment.objects.filter(
-            user=user, status__in=["active", "pending"]
-        ).values_list("course_id", flat=True)
-
-        upcoming_lessons = (
-            Lesson.objects.select_related("course__dance_style", "course__teacher__user")
-            .filter(course_id__in=enrolled_course_ids, lesson_date__gte=today, status="scheduled")
-            .order_by("lesson_date", "time_from")[:5]
-        )
-
-        return Response(
-            {
-                "enrolled_courses_count": len(enrolled_course_ids),
-                "upcoming_lessons": LessonDashboardItemSerializer(upcoming_lessons, many=True).data,
-                "favorite_courses_count": FavoriteCourse.objects.filter(user=user).count(),
-            }
-        )
-
-
-@extend_schema_view(
-    get=extend_schema(tags=["Teachers"], summary="Дашборд преподавателя")
-)
-class TeacherDashboardAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    authentication_classes = [JWTAuthentication, SessionAuthentication]
-
-    def get(self, request):
-        user = request.user
-        today = timezone.localdate()
-
-        teacher_profile = getattr(user, "teacher_profile", None)
-        if not teacher_profile:
-            return Response({"detail": "Профиль преподавателя не найден."}, status=status.HTTP_404_NOT_FOUND)
-
-        active_courses = Course.objects.filter(
-            teacher=teacher_profile,
-            status__in=["published", "active"],
-            date_to__gte=today,
-        )
-        active_course_ids = list(active_courses.values_list("id", flat=True))
-
-        total_students = Enrollment.objects.filter(
-            course_id__in=active_course_ids, status__in=["active", "pending"]
-        ).values("user_id").distinct().count()
-
-        upcoming_lessons = (
-            Lesson.objects.select_related("course__dance_style")
-            .filter(course_id__in=active_course_ids, lesson_date__gte=today, status="scheduled")
-            .order_by("lesson_date", "time_from")[:5]
-        )
-
-        return Response(
-            {
-                "active_courses_count": active_courses.count(),
-                "total_students": total_students,
-                "upcoming_lessons": LessonDashboardItemSerializer(upcoming_lessons, many=True).data,
-            }
-        )
