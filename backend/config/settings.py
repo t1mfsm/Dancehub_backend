@@ -121,6 +121,8 @@ if USE_S3:
     AWS_QUERYSTRING_AUTH = False
     AWS_DEFAULT_ACL = None
     AWS_S3_FILE_OVERWRITE = False
+    # Use http for local MinIO (no SSL); override to 'https' in production
+    AWS_S3_URL_PROTOCOL = config("AWS_S3_URL_PROTOCOL", default="http")
 
     STORAGES = {
         "default": {

@@ -7,7 +7,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from .constants import CourseLifecycleStatus
-from .models import Attendance, Course, CourseImage, CourseScheduleRule, DanceStyle, Lesson, Studio
+from .models import Attendance, AttendanceStatus, Course, CourseImage, CourseScheduleRule, DanceStyle, Hall, Lesson, Studio
 
 
 def _build_absolute_url(value: str | None, request) -> str:
@@ -57,6 +57,8 @@ class StudioDetailSerializer(StudioSerializer):
 
 class MapPointSerializer(serializers.ModelSerializer):
     city = serializers.CharField(source="city.name", read_only=True)
+    image = serializers.SerializerMethodField()
+    halls_count = serializers.IntegerField(read_only=True)
     active_courses_count = serializers.IntegerField(read_only=True)
     dance_styles = serializers.SerializerMethodField()
 
@@ -71,6 +73,7 @@ class MapPointSerializer(serializers.ModelSerializer):
             "lat",
             "lng",
             "image",
+            "halls_count",
             "active_courses_count",
             "dance_styles",
         )
@@ -78,6 +81,10 @@ class MapPointSerializer(serializers.ModelSerializer):
     def get_dance_styles(self, obj: Studio) -> list[str]:
         styles = obj.courses.select_related("dance_style").values_list("dance_style__name", flat=True).distinct()
         return list(styles)
+
+    def get_image(self, obj: Studio) -> str:
+        request = self.context.get("request")
+        return _build_absolute_url(obj.image, request)
 
 
 WEEKDAY_TO_RU = {
@@ -93,6 +100,8 @@ WEEKDAY_ORDER = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 
 class CourseScheduleRuleSerializer(serializers.ModelSerializer):
+    hall = serializers.CharField(source="hall.name", read_only=True)
+
     class Meta:
         model = CourseScheduleRule
         fields = (
@@ -101,6 +110,7 @@ class CourseScheduleRuleSerializer(serializers.ModelSerializer):
             "time_from",
             "time_to",
             "location_text",
+            "hall",
         )
 
 
@@ -257,6 +267,7 @@ class LessonSerializer(serializers.ModelSerializer):
     teacher_name = serializers.SerializerMethodField()
     studio = serializers.CharField(source="course.studio.name", read_only=True)
     city = serializers.CharField(source="course.studio.city.name", read_only=True)
+    hall = serializers.CharField(source="hall.name", read_only=True)
 
     class Meta:
         model = Lesson
@@ -270,6 +281,7 @@ class LessonSerializer(serializers.ModelSerializer):
             "time_to",
             "location_text",
             "status",
+            "hall",
             "studio",
             "city",
         )
@@ -283,6 +295,7 @@ class CalendarEventSerializer(serializers.ModelSerializer):
     course_name = serializers.CharField(source="course.name", read_only=True)
     teacher_name = serializers.SerializerMethodField()
     dance_style = serializers.CharField(source="course.dance_style.name", read_only=True)
+    level = serializers.CharField(source="course.level", read_only=True)
     studio = serializers.CharField(source="course.studio.name", read_only=True)
     city = serializers.CharField(source="course.studio.city.name", read_only=True)
     start = serializers.SerializerMethodField()
@@ -296,6 +309,7 @@ class CalendarEventSerializer(serializers.ModelSerializer):
             "course_name",
             "teacher_name",
             "dance_style",
+            "level",
             "lesson_date",
             "time_from",
             "time_to",
@@ -335,7 +349,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
             "course_name",
             "student_id",
             "student_name",
-            "present",
+            "status",
             "marked_at",
         )
 
@@ -345,7 +359,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
 
 class AttendanceMarkSerializer(serializers.Serializer):
     student_id = serializers.IntegerField()
-    present = serializers.BooleanField()
+    status = serializers.ChoiceField(choices=AttendanceStatus.choices)
 
 
 class CourseStudentSerializer(serializers.Serializer):
@@ -364,6 +378,12 @@ class CourseStudentSerializer(serializers.Serializer):
 
 
 class CourseScheduleRuleWriteSerializer(serializers.Serializer):
+    hall_id = serializers.PrimaryKeyRelatedField(
+        source="hall",
+        queryset=Hall.objects.all(),
+        allow_null=True,
+        required=False,
+    )
     weekday = serializers.ChoiceField(choices=CourseScheduleRule._meta.get_field("weekday").choices)
     time_from = serializers.TimeField()
     time_to = serializers.TimeField()
@@ -483,6 +503,7 @@ class CourseWriteSerializer(serializers.ModelSerializer):
             [
                 CourseScheduleRule(
                     course=course,
+                    hall=item.get("hall"),
                     weekday=item["weekday"],
                     time_from=item["time_from"],
                     time_to=item["time_to"],
@@ -575,11 +596,18 @@ class LessonWriteSerializer(serializers.ModelSerializer):
         allow_null=True,
         required=False,
     )
+    hall_id = serializers.PrimaryKeyRelatedField(
+        source="hall",
+        queryset=Hall.objects.all(),
+        allow_null=True,
+        required=False,
+    )
 
     class Meta:
         model = Lesson
         fields = (
             "schedule_rule_id",
+            "hall_id",
             "lesson_date",
             "time_from",
             "time_to",

@@ -84,9 +84,12 @@ class StudioRetrieveAPIView(generics.RetrieveAPIView):
 )
 class MapPointListAPIView(generics.ListAPIView):
     serializer_class = MapPointSerializer
+    permission_classes = [permissions.AllowAny]
+    pagination_class = None  # map needs all studios at once
 
     def get_queryset(self):
         queryset = Studio.objects.select_related("city").annotate(
+            halls_count=Count("halls", distinct=True),
             active_courses_count=Count("courses", filter=Q(courses__status="published"), distinct=True),
         )
 
@@ -135,6 +138,7 @@ class MapPointListAPIView(generics.ListAPIView):
 )
 class CourseListAPIView(generics.ListCreateAPIView):
     permission_classes = [permissions.AllowAny]
+    pagination_class = None
 
     @staticmethod
     def _with_activity_status(queryset):
@@ -458,6 +462,123 @@ class CourseStudentListAPIView(generics.ListAPIView):
 
 @extend_schema_view(
     get=extend_schema(
+        tags=["Lessons"],
+        summary="Занятия курса",
+        description="Возвращает все занятия выбранного курса.",
+    )
+)
+class CourseLessonListAPIView(generics.ListAPIView):
+    serializer_class = LessonSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [JWTAuthentication, SessionAuthentication]
+
+    def get_queryset(self):
+        course = generics.get_object_or_404(Course, id=self.kwargs["id"])
+        user = self.request.user
+        is_allowed = (
+            user.is_superuser
+            or course.teacher.user_id == user.id
+            or Enrollment.objects.filter(
+                user=user,
+                course=course,
+                status__in=["active", "pending", "completed"],
+            ).exists()
+        )
+        if not is_allowed:
+            raise exceptions.PermissionDenied("Список занятий недоступен для этого пользователя.")
+
+        return (
+            Lesson.objects.select_related("course__studio__city", "course__teacher__user", "hall")
+            .filter(course=course)
+            .order_by("lesson_date", "time_from")
+        )
+
+
+@extend_schema_view(
+    get=extend_schema(
+        tags=["Attendance"],
+        summary="Статистика посещаемости по курсу",
+        description="Возвращает агрегированную статистику по занятиям и студентам курса.",
+    )
+)
+class CourseAttendanceStatsAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [JWTAuthentication, SessionAuthentication]
+
+    def get(self, request, id: int):
+        course = generics.get_object_or_404(Course, id=id)
+        user = request.user
+        if not (user.is_superuser or course.teacher.user_id == user.id):
+            raise exceptions.PermissionDenied("Статистика доступна только преподавателю курса.")
+
+        lessons = Lesson.objects.filter(course=course).order_by("lesson_date", "time_from")
+        date_from = request.query_params.get("date_from")
+        date_to = request.query_params.get("date_to")
+        if date_from:
+            lessons = lessons.filter(lesson_date__gte=date_from)
+        if date_to:
+            lessons = lessons.filter(lesson_date__lte=date_to)
+
+        lesson_ids = list(lessons.values_list("id", flat=True))
+        active_enrollments = Enrollment.objects.select_related("user").filter(
+            course=course,
+            status__in=["active", "pending", "completed"],
+        )
+        attendance_rows = Attendance.objects.select_related("student", "lesson").filter(lesson_id__in=lesson_ids)
+
+        per_lesson = []
+        percent_values = []
+        for lesson in lessons:
+            lesson_rows = [row for row in attendance_rows if row.lesson_id == lesson.id]
+            present = sum(1 for row in lesson_rows if row.status == "present")
+            absent = sum(1 for row in lesson_rows if row.status == "absent")
+            total = present + absent
+            percent = round((present / total) * 100, 2) if total else 0.0
+            percent_values.append(percent)
+            per_lesson.append(
+                {
+                    "lesson_id": lesson.id,
+                    "date": lesson.lesson_date,
+                    "present": present,
+                    "absent": absent,
+                    "total": total,
+                    "percent": percent,
+                }
+            )
+
+        per_student = []
+        for enrollment in active_enrollments:
+            student_rows = [row for row in attendance_rows if row.student_id == enrollment.user_id]
+            attended = sum(1 for row in student_rows if row.status == "present")
+            missed = sum(1 for row in student_rows if row.status == "absent")
+            total = attended + missed
+            percent = round((attended / total) * 100, 2) if total else 0.0
+            per_student.append(
+                {
+                    "student_id": enrollment.user_id,
+                    "student_name": enrollment.user.get_full_name() or enrollment.user.email,
+                    "attended": attended,
+                    "missed": missed,
+                    "total": total,
+                    "percent": percent,
+                }
+            )
+
+        return Response(
+            {
+                "total_lessons": lessons.count(),
+                "conducted_lessons": lessons.exclude(status="cancelled").count(),
+                "cancelled_lessons": lessons.filter(status="cancelled").count(),
+                "avg_attendance_percent": round(sum(percent_values) / len(percent_values), 2) if percent_values else 0.0,
+                "total_students": active_enrollments.count(),
+                "per_lesson": per_lesson,
+                "per_student": per_student,
+            }
+        )
+
+
+@extend_schema_view(
+    get=extend_schema(
         tags=["Attendance"],
         summary="Посещаемость по курсу",
         description="Возвращает все отметки посещаемости по выбранному курсу.",
@@ -519,6 +640,24 @@ class AttendanceMarkAPIView(APIView):
         attendance, _ = Attendance.objects.update_or_create(
             lesson=lesson,
             student_id=serializer.validated_data["student_id"],
-            defaults={"present": serializer.validated_data["present"]},
+            defaults={"status": serializer.validated_data["status"]},
         )
         return Response(AttendanceSerializer(attendance).data, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    tags=["Lessons"],
+    summary="Отменить занятие",
+    description="Переводит занятие в статус cancelled.",
+)
+class LessonCancelAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [JWTAuthentication, SessionAuthentication]
+
+    def post(self, request, lesson_id: int):
+        lesson = generics.get_object_or_404(Lesson, id=lesson_id)
+        if not (request.user.is_superuser or lesson.course.teacher.user_id == request.user.id):
+            raise exceptions.PermissionDenied("Отменять занятие может только преподаватель курса.")
+        lesson.status = "cancelled"
+        lesson.save(update_fields=["status", "updated_at"])
+        return Response(LessonSerializer(lesson).data)

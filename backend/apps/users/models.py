@@ -17,10 +17,10 @@ class UserRole(models.TextChoices):
 
 
 class DanceLevel(models.TextChoices):
-    BEGINNER = "Начинающие", "Начинающие"
-    INTERMEDIATE = "Средний уровень", "Средний уровень"
-    ADVANCED = "Продвинутые", "Продвинутые"
-    ANY = "Любой уровень", "Любой уровень"
+    BEGINNER = "beginner", "Начинающие"
+    INTERMEDIATE = "intermediate", "Средний уровень"
+    ADVANCED = "advanced", "Продвинутые"
+    ANY = "any", "Любой уровень"
 
 
 class Weekday(models.TextChoices):
@@ -37,6 +37,7 @@ class User(AbstractUser):
     email = models.EmailField(unique=True)
     phone = models.CharField(max_length=32, blank=True)
     avatar = models.URLField(blank=True)
+    middle_name = models.CharField(max_length=150, blank=True)
     city = models.ForeignKey(
         "locations.City",
         on_delete=models.SET_NULL,
@@ -55,6 +56,11 @@ class User(AbstractUser):
         default=UserRole.STUDENT,
     )
     survey_completed = models.BooleanField(default=False)
+    preferred_time_from = models.TimeField(null=True, blank=True)
+    preferred_time_to = models.TimeField(null=True, blank=True)
+    preferred_weekdays = models.JSONField(default=list, blank=True)
+    preferred_dance_styles = models.JSONField(default=list, blank=True)
+    survey_preferences = models.JSONField(default=dict, blank=True)
     flags = models.JSONField(default=dict, blank=True)
 
     USERNAME_FIELD = "email"
@@ -136,5 +142,33 @@ class TeacherReview(TimeStampedModel):
             models.UniqueConstraint(
                 fields=["author_user", "teacher"],
                 name="unique_teacher_review_per_author",
+            )
+        ]
+
+
+class UserDanceStyleSkill(models.Model):
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="dance_style_skills",
+    )
+    dance_style = models.ForeignKey(
+        "courses.DanceStyle",
+        on_delete=models.CASCADE,
+        related_name="user_skills",
+    )
+    level = models.CharField(
+        max_length=32,
+        choices=DanceLevel.choices,
+    )
+
+    class Meta:
+        db_table = "user_dance_style_skills"
+        verbose_name = "Навык пользователя по стилю"
+        verbose_name_plural = "Навыки пользователей по стилям"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "dance_style"],
+                name="unique_user_dance_style_skill",
             )
         ]

@@ -8,6 +8,7 @@ from .models import (
     DanceStyle,
     Enrollment,
     FavoriteCourse,
+    Hall,
     Lesson,
     Studio,
 )
@@ -26,6 +27,13 @@ class StudioAdmin(admin.ModelAdmin):
     list_filter = ("city",)
 
 
+@admin.register(Hall)
+class HallAdmin(admin.ModelAdmin):
+    list_display = ("id", "name", "studio")
+    search_fields = ("name", "studio__name")
+    list_filter = ("studio",)
+
+
 @admin.register(Course)
 class CourseAdmin(admin.ModelAdmin):
     list_display = ("id", "name", "teacher", "dance_style", "studio", "level", "status", "music_url")
@@ -40,12 +48,12 @@ class CourseImageAdmin(admin.ModelAdmin):
 
 @admin.register(CourseScheduleRule)
 class CourseScheduleRuleAdmin(admin.ModelAdmin):
-    list_display = ("id", "course", "weekday", "time_from", "time_to")
+    list_display = ("id", "course", "hall", "weekday", "time_from", "time_to")
 
 
 @admin.register(Lesson)
 class LessonAdmin(admin.ModelAdmin):
-    list_display = ("id", "course", "lesson_date", "time_from", "time_to", "status")
+    list_display = ("id", "course", "hall", "lesson_date", "time_from", "time_to", "status")
     list_filter = ("status",)
 
 
@@ -57,8 +65,8 @@ class EnrollmentAdmin(admin.ModelAdmin):
 
 @admin.register(Attendance)
 class AttendanceAdmin(admin.ModelAdmin):
-    list_display = ("id", "lesson", "student", "present", "marked_at")
-    list_filter = ("present",)
+    list_display = ("id", "lesson", "student", "status", "marked_at")
+    list_filter = ("status",)
 
 
 @admin.register(FavoriteCourse)

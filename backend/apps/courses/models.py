@@ -68,6 +68,30 @@ class Studio(TimeStampedModel):
         return self.name
 
 
+class Hall(TimeStampedModel):
+    studio = models.ForeignKey(
+        Studio,
+        on_delete=models.CASCADE,
+        related_name="halls",
+    )
+    name = models.CharField(max_length=255)
+
+    class Meta:
+        db_table = "halls"
+        verbose_name = "Зал"
+        verbose_name_plural = "Залы"
+        ordering = ["studio_id", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["studio", "name"],
+                name="unique_hall_name_per_studio",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.studio.name}: {self.name}"
+
+
 class Course(TimeStampedModel):
     teacher = models.ForeignKey(
         "users.TeacherProfile",
@@ -136,6 +160,13 @@ class CourseScheduleRule(models.Model):
         on_delete=models.CASCADE,
         related_name="schedule_rules",
     )
+    hall = models.ForeignKey(
+        Hall,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="schedule_rules",
+    )
     weekday = models.CharField(max_length=3, choices=Weekday.choices)
     time_from = models.TimeField()
     time_to = models.TimeField()
@@ -155,6 +186,13 @@ class Lesson(TimeStampedModel):
     )
     schedule_rule = models.ForeignKey(
         CourseScheduleRule,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lessons",
+    )
+    hall = models.ForeignKey(
+        Hall,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -209,6 +247,11 @@ class Enrollment(TimeStampedModel):
         ]
 
 
+class AttendanceStatus(models.TextChoices):
+    PRESENT = "present", "Присутствовал"
+    ABSENT = "absent", "Отсутствовал"
+
+
 class Attendance(models.Model):
     lesson = models.ForeignKey(
         Lesson,
@@ -220,7 +263,11 @@ class Attendance(models.Model):
         on_delete=models.CASCADE,
         related_name="attendance_records",
     )
-    present = models.BooleanField(default=False)
+    status = models.CharField(
+        max_length=16,
+        choices=AttendanceStatus.choices,
+        default=AttendanceStatus.PRESENT,
+    )
     marked_at = models.DateTimeField(auto_now=True)
 
     class Meta:

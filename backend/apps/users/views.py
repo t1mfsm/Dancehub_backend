@@ -14,7 +14,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from apps.courses.models import Course, Enrollment, FavoriteCourse
 from apps.courses.serializers import CourseDetailSerializer
 
-from .models import FavoriteTeacher, TeacherProfile
+from .models import FavoriteTeacher, TeacherProfile, UserDanceStyleSkill
 from .serializers import (
     ChangePasswordSerializer,
     CourseRecommendationSerializer,
@@ -26,10 +26,14 @@ from .serializers import (
     MeSerializer,
     MeUpdateSerializer,
     RegisterSerializer,
+    SurveySubmitSerializer,
     TeacherDetailSerializer,
     TeacherProfileUpdateSerializer,
     TeacherCourseListSerializer,
     TeacherListSerializer,
+    UserFlagSerializer,
+    UserPreferencesSerializer,
+    UserSkillItemSerializer,
 )
 
 
@@ -205,6 +209,122 @@ class MeAPIView(generics.RetrieveAPIView):
         return self.request.user
 
 
+@extend_schema(
+    tags=["Users"],
+    summary="Сохранить результаты опроса",
+    description="Сохраняет роль, город, уровень и предпочтения пользователя после онбординг-опроса.",
+    request=SurveySubmitSerializer,
+    responses=MeSerializer,
+)
+class UserSurveyAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [JWTAuthentication, SessionAuthentication]
+
+    def patch(self, request):
+        serializer = SurveySubmitSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.update(request.user, serializer.validated_data)
+        request.user.refresh_from_db()
+        return Response({"detail": "OK"})
+
+
+@extend_schema(
+    tags=["Users"],
+    summary="Обновить предпочтения пользователя",
+    description="Обновляет город, уровень, предпочитаемые дни и временные слоты пользователя.",
+    request=UserPreferencesSerializer,
+)
+class UserPreferencesAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [JWTAuthentication, SessionAuthentication]
+
+    def patch(self, request):
+        serializer = UserPreferencesSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        SurveySubmitSerializer().update(request.user, serializer.validated_data)
+        return Response({"detail": "updated"})
+
+
+@extend_schema(
+    tags=["Users"],
+    summary="Сохранить навыки пользователя по стилям",
+    description="Полностью заменяет список навыков пользователя по танцевальным стилям.",
+    request=UserSkillItemSerializer(many=True),
+)
+class UserSkillsAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [JWTAuthentication, SessionAuthentication]
+
+    def put(self, request):
+        serializer = UserSkillItemSerializer(data=request.data, many=True)
+        serializer.is_valid(raise_exception=True)
+
+        UserDanceStyleSkill.objects.filter(user=request.user).delete()
+        UserDanceStyleSkill.objects.bulk_create(
+            [
+                UserDanceStyleSkill(
+                    user=request.user,
+                    dance_style=item["dance_style"],
+                    level=item["level"],
+                )
+                for item in serializer.validated_data
+            ]
+        )
+        return Response({"detail": "skills saved"})
+
+
+@extend_schema(
+    tags=["Users"],
+    summary="Установить пользовательский флаг",
+    description="Сохраняет булев флаг в JSON-поле пользователя.",
+    request=UserFlagSerializer,
+)
+class UserFlagAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [JWTAuthentication, SessionAuthentication]
+
+    def post(self, request):
+        serializer = UserFlagSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        flags = dict(request.user.flags or {})
+        flags[serializer.validated_data["name"]] = serializer.validated_data["value"]
+        request.user.flags = flags
+        request.user.save(update_fields=["flags", "updated_at"] if hasattr(request.user, "updated_at") else ["flags"])
+        return Response({"detail": "ok"})
+
+
+@extend_schema(
+    tags=["Users"],
+    summary="Сбросить онбординг и опрос",
+    description="Сбрасывает результаты опроса и пользовательские флаги.",
+)
+class UserRestartAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [JWTAuthentication, SessionAuthentication]
+
+    def post(self, request):
+        request.user.survey_completed = False
+        request.user.preferred_time_from = None
+        request.user.preferred_time_to = None
+        request.user.preferred_weekdays = []
+        request.user.preferred_dance_styles = []
+        request.user.survey_preferences = {}
+        request.user.flags = {}
+        request.user.save(
+            update_fields=[
+                "survey_completed",
+                "preferred_time_from",
+                "preferred_time_to",
+                "preferred_weekdays",
+                "preferred_dance_styles",
+                "survey_preferences",
+                "flags",
+            ]
+        )
+        UserDanceStyleSkill.objects.filter(user=request.user).delete()
+        return Response({"detail": "restarted"})
+
+
 @extend_schema_view(
     get=extend_schema(
         tags=["Users"],
@@ -313,6 +433,7 @@ class EnrollmentListAPIView(generics.ListAPIView):
     serializer_class = CourseDetailSerializer
     permission_classes = [permissions.IsAuthenticated]
     authentication_classes = [JWTAuthentication, SessionAuthentication]
+    pagination_class = None  # frontend handles pagination client-side
 
     def get_queryset(self):
         return (
@@ -335,6 +456,37 @@ class EnrollmentListAPIView(generics.ListAPIView):
 
 @extend_schema_view(
     get=extend_schema(
+        tags=["Users"],
+        summary="Короткий список моих курсов",
+        description="Возвращает записи пользователя в компактном формате для быстрой проверки статуса.",
+    )
+)
+class MyCourseStatusListAPIView(generics.ListAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [JWTAuthentication, SessionAuthentication]
+
+    def get_queryset(self):
+        return (
+            Enrollment.objects.filter(user=self.request.user)
+            .select_related("course")
+            .order_by("-created_at")
+        )
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        return Response(
+            [
+                {
+                    "course": {"id": enrollment.course_id},
+                    "status": enrollment.status,
+                }
+                for enrollment in queryset
+            ]
+        )
+
+
+@extend_schema_view(
+    get=extend_schema(
         tags=["Teachers"],
         summary="Мои курсы как преподавателя",
         description=(
@@ -351,6 +503,7 @@ class MyTeachingCourseListAPIView(generics.ListAPIView):
     serializer_class = CourseDetailSerializer
     permission_classes = [permissions.IsAuthenticated]
     authentication_classes = [JWTAuthentication, SessionAuthentication]
+    pagination_class = None  # frontend handles pagination client-side
 
     def get_queryset(self):
         queryset = (
@@ -586,7 +739,7 @@ class RecommendedCourseListAPIView(generics.ListAPIView):
 
         if user.dance_level:
             queryset = queryset.filter(
-                Q(level=user.dance_level) | Q(level="Любой уровень")
+                Q(level=user.dance_level) | Q(level="any")
             )
 
         return queryset.order_by("-teacher__rating_avg", "date_from", "id")[:10]

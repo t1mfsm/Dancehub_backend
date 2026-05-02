@@ -1,19 +1,22 @@
 import uuid
 from pathlib import Path
 
-from django.core.files.storage import default_storage
 from django.contrib.auth import authenticate
+from django.core.files.storage import default_storage
 from rest_framework import serializers
 
-from apps.courses.models import Course, Enrollment, FavoriteCourse, Lesson
+from apps.courses.models import Course, DanceStyle, Enrollment, FavoriteCourse, Lesson
 from apps.locations.models import City
 
 from .models import (
+    DanceLevel,
     FavoriteTeacher,
     TeacherProfile,
     TeacherReview,
-    UserRole,
     User,
+    UserDanceStyleSkill,
+    UserRole,
+    Weekday,
 )
 
 
@@ -116,8 +119,8 @@ class TeacherDetailSerializer(TeacherListSerializer):
         request = self.context.get("request")
         return [_build_absolute_url(image, request) for image in obj.images]
 
-    def get_rating(self, obj: TeacherProfile) -> float:
-        return float(obj.rating_avg)
+    def get_rating(self, obj: TeacherProfile) -> str:
+        return str(obj.rating_avg)
 
 
 class MeTeacherSerializer(serializers.ModelSerializer):
@@ -138,8 +141,8 @@ class MeTeacherSerializer(serializers.ModelSerializer):
             "rating",
         )
 
-    def get_rating(self, obj: TeacherProfile) -> float:
-        return float(obj.rating_avg)
+    def get_rating(self, obj: TeacherProfile) -> str:
+        return str(obj.rating_avg)
 
     def get_images(self, obj: TeacherProfile) -> list[str]:
         request = self.context.get("request")
@@ -174,11 +177,12 @@ class TeacherProfileUpdateSerializer(serializers.Serializer):
 
 class MeSerializer(serializers.ModelSerializer):
     city = serializers.CharField(source="city.name", read_only=True, default="")
-    level = serializers.CharField(source="dance_level", read_only=True)
-    registered_at = serializers.DateTimeField(source="date_joined", read_only=True)
     teacher = serializers.SerializerMethodField()
     favorite_course_ids = serializers.SerializerMethodField()
     favorite_teacher_ids = serializers.SerializerMethodField()
+    favorite_teacher_names = serializers.SerializerMethodField()
+    price_from = serializers.SerializerMethodField()
+    price_to = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -187,18 +191,25 @@ class MeSerializer(serializers.ModelSerializer):
             "email",
             "username",
             "first_name",
+            "middle_name",
             "last_name",
             "phone",
             "avatar",
             "city",
-            "level",
+            "dance_level",
             "role",
-            "registered_at",
             "survey_completed",
             "flags",
             "teacher",
             "favorite_course_ids",
             "favorite_teacher_ids",
+            "favorite_teacher_names",
+            "preferred_time_from",
+            "preferred_time_to",
+            "price_from",
+            "price_to",
+            "preferred_weekdays",
+            "preferred_dance_styles",
         )
 
     def get_favorite_course_ids(self, obj: User) -> list[int]:
@@ -206,6 +217,18 @@ class MeSerializer(serializers.ModelSerializer):
 
     def get_favorite_teacher_ids(self, obj: User) -> list[int]:
         return list(obj.favorite_teachers.values_list("teacher_id", flat=True))
+
+    def get_favorite_teacher_names(self, obj: User) -> list[str]:
+        return [
+            favorite.teacher.user.get_full_name() or favorite.teacher.user.email
+            for favorite in obj.favorite_teachers.select_related("teacher__user")
+        ]
+
+    def get_price_from(self, obj: User):
+        return (obj.survey_preferences or {}).get("price_from")
+
+    def get_price_to(self, obj: User):
+        return (obj.survey_preferences or {}).get("price_to")
 
     def get_teacher(self, obj: User) -> dict | None:
         teacher = TeacherProfile.objects.filter(user=obj).first()
@@ -228,14 +251,13 @@ class MeUpdateSerializer(serializers.ModelSerializer):
         fields = (
             "username",
             "first_name",
+            "middle_name",
             "last_name",
             "phone",
             "avatar",
             "avatar_file",
             "city_id",
             "dance_level",
-            "survey_completed",
-            "flags",
         )
 
     def update(self, instance, validated_data):
@@ -250,10 +272,8 @@ class MeUpdateSerializer(serializers.ModelSerializer):
             stored_path = default_storage.save(filename, avatar_file)
             url = default_storage.url(stored_path)
             request = self.context.get("request")
-
             if not url.startswith(("http://", "https://")) and request is not None:
                 url = request.build_absolute_uri(url)
-
             instance.avatar = url
 
         instance.save()
@@ -369,31 +389,138 @@ class LogoutSerializer(serializers.Serializer):
 
 class RegisterSerializer(serializers.Serializer):
     email = serializers.EmailField()
-    password = serializers.CharField(write_only=True, min_length=8)
+    username = serializers.CharField(required=False, allow_blank=True, default="")
     first_name = serializers.CharField(required=False, allow_blank=True, default="")
+    middle_name = serializers.CharField(required=False, allow_blank=True, default="")
     last_name = serializers.CharField(required=False, allow_blank=True, default="")
     phone = serializers.CharField(required=False, allow_blank=True, default="")
-    role = serializers.ChoiceField(choices=UserRole.choices, required=False, default=UserRole.STUDENT)
+    password = serializers.CharField(write_only=True, min_length=8)
+    password_confirm = serializers.CharField(write_only=True, min_length=8)
 
     def validate_email(self, value: str) -> str:
         if User.objects.filter(email__iexact=value).exists():
             raise serializers.ValidationError("Пользователь с таким email уже существует.")
         return value
 
+    def validate(self, attrs):
+        if attrs["password"] != attrs["password_confirm"]:
+            raise serializers.ValidationError({"password_confirm": "Пароли не совпадают."})
+        return attrs
+
     def create(self, validated_data):
-        email = validated_data["email"]
-        password = validated_data["password"]
         user = User(
-            email=email,
-            username=email,
+            email=validated_data["email"],
+            username=validated_data.get("username", "").strip() or validated_data["email"],
             first_name=validated_data.get("first_name", ""),
+            middle_name=validated_data.get("middle_name", ""),
             last_name=validated_data.get("last_name", ""),
             phone=validated_data.get("phone", ""),
-            role=validated_data.get("role", UserRole.STUDENT),
         )
-        user.set_password(password)
+        user.set_password(validated_data["password"])
         user.save()
         return user
+
+
+class SurveySubmitSerializer(serializers.Serializer):
+    role = serializers.ChoiceField(choices=UserRole.choices, required=False)
+    city = serializers.CharField(required=False, allow_blank=True)
+    level = serializers.ChoiceField(choices=DanceLevel.values, required=False)
+    preferred_dance_styles = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+    )
+    preferred_weekdays = serializers.ListField(
+        child=serializers.ChoiceField(choices=Weekday.values),
+        required=False,
+    )
+    preferred_time_from = serializers.TimeField(required=False, allow_null=True)
+    preferred_time_to = serializers.TimeField(required=False, allow_null=True)
+    price_from = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    price_to = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+
+    def validate(self, attrs):
+        price_from = attrs.get("price_from")
+        price_to = attrs.get("price_to")
+        if price_from is not None and price_to is not None and price_to < price_from:
+            raise serializers.ValidationError(
+                {"price_to": "Верхняя граница бюджета не может быть меньше нижней."}
+            )
+        return attrs
+
+    def update(self, instance: User, validated_data: dict) -> User:
+        city_name = validated_data.pop("city", None)
+        role = validated_data.pop("role", None)
+
+        if role:
+            instance.role = role
+        if city_name is not None:
+            city_name = city_name.strip()
+            if city_name:
+                city, _ = City.objects.get_or_create(name=city_name)
+                instance.city = city
+            else:
+                instance.city = None
+
+        for field in (
+            "level",
+            "preferred_dance_styles",
+            "preferred_weekdays",
+            "preferred_time_from",
+            "preferred_time_to",
+        ):
+            if field not in validated_data:
+                continue
+            if field == "level":
+                instance.dance_level = validated_data[field]
+            else:
+                setattr(instance, field, validated_data[field])
+
+        survey_preferences = {
+            "price_from": validated_data.get("price_from"),
+            "price_to": validated_data.get("price_to"),
+        }
+        instance.survey_preferences = {
+            **(instance.survey_preferences or {}),
+            **{k: v for k, v in survey_preferences.items() if v is not None},
+        }
+        instance.survey_completed = True
+        instance.save()
+        return instance
+
+
+class UserPreferencesSerializer(serializers.Serializer):
+    city = serializers.CharField(required=False, allow_blank=True)
+    level = serializers.ChoiceField(choices=DanceLevel.values, required=False)
+    preferred_weekdays = serializers.ListField(
+        child=serializers.ChoiceField(choices=Weekday.values),
+        required=False,
+    )
+    preferred_time_from = serializers.TimeField(required=False, allow_null=True)
+    preferred_time_to = serializers.TimeField(required=False, allow_null=True)
+    price_from = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    price_to = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+
+    def validate(self, attrs):
+        price_from = attrs.get("price_from")
+        price_to = attrs.get("price_to")
+        if price_from is not None and price_to is not None and price_to < price_from:
+            raise serializers.ValidationError(
+                {"price_to": "Верхняя граница бюджета не может быть меньше нижней."}
+            )
+        return attrs
+
+
+class UserSkillItemSerializer(serializers.Serializer):
+    dance_style_id = serializers.PrimaryKeyRelatedField(
+        source="dance_style",
+        queryset=DanceStyle.objects.all(),
+    )
+    level = serializers.ChoiceField(choices=DanceLevel.values)
+
+
+class UserFlagSerializer(serializers.Serializer):
+    name = serializers.CharField()
+    value = serializers.BooleanField()
 
 
 class LoginSerializer(serializers.Serializer):
