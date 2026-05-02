@@ -6,19 +6,17 @@ from .views import (
     CourseAttendanceListAPIView,
     CourseAttendanceStatsAPIView,
     CourseListAPIView,
-    CourseReviewCreateAPIView,
-    CourseStudentListAPIView,
     CourseLessonListAPIView,
     CourseRetrieveAPIView,
-    LessonCancelAPIView,
+    CourseStudentListAPIView,
     DanceStyleListAPIView,
-    LessonRetrieveUpdateDestroyAPIView,
     LessonAttendanceListAPIView,
+    LessonCancelAPIView,
+    LessonRetrieveUpdateDestroyAPIView,
     MapPointListAPIView,
-    StudioRetrieveAPIView,
     StudioListAPIView,
+    StudioRetrieveAPIView,
 )
-
 
 app_name = "courses"
 
@@ -33,17 +31,8 @@ urlpatterns = [
     path("courses/<int:id>/lessons/", CourseLessonListAPIView.as_view(), name="course-lessons"),
     path("courses/<int:id>/students/", CourseStudentListAPIView.as_view(), name="course-students"),
     path("courses/<int:id>/attendance/", CourseAttendanceListAPIView.as_view(), name="course-attendance"),
-    path(
-        "courses/<int:id>/attendance-stats/",
-        CourseAttendanceStatsAPIView.as_view(),
-        name="course-attendance-stats",
-    ),
-    path("reviews/courses/<int:course_id>/", CourseReviewCreateAPIView.as_view(), name="course-review-create"),
-    path(
-        "lessons/<int:lesson_id>/cancel/",
-        LessonCancelAPIView.as_view(),
-        name="lesson-cancel",
-    ),
+    path("courses/<int:id>/attendance-stats/", CourseAttendanceStatsAPIView.as_view(), name="course-attendance-stats"),
+    path("lessons/<int:lesson_id>/cancel/", LessonCancelAPIView.as_view(), name="lesson-cancel"),
     path("lessons/<int:lesson_id>/", LessonRetrieveUpdateDestroyAPIView.as_view(), name="lesson-detail"),
     path("lessons/<int:lesson_id>/attendance/", LessonAttendanceListAPIView.as_view(), name="lesson-attendance"),
     path("lessons/<int:lesson_id>/attendance/mark/", AttendanceMarkAPIView.as_view(), name="attendance-mark"),

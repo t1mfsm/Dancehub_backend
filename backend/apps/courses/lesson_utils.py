@@ -29,7 +29,7 @@ def effective_lesson_status(lesson: Lesson) -> str:
     if lesson.status == LessonStatus.CANCELLED:
         return LessonStatus.CANCELLED
     if lesson_has_ended(lesson):
-        return LessonStatus.COMPLETED
+        return "completed"
     return lesson.status
 
 

@@ -13,21 +13,17 @@ class TimeStampedModel(models.Model):
 class UserRole(models.TextChoices):
     STUDENT = "student", "Ученик"
     TEACHER = "teacher", "Преподаватель"
-    ADMIN = "admin", "Администратор"
 
 
 class DanceLevel(models.TextChoices):
     BEGINNER = "beginner", "Начинающий"
     INTERMEDIATE = "intermediate", "Средний"
     ADVANCED = "advanced", "Продвинутый"
-    ANY = "any", "Любой"
 
 
 class AttendanceStatus(models.TextChoices):
     PRESENT = "present", "Присутствовал"
     ABSENT = "absent", "Отсутствовал"
-    LATE = "late", "Опоздал"
-    EXCUSED = "excused", "Уважительная причина"
 
 
 class Weekday(models.TextChoices):
@@ -62,8 +58,13 @@ class User(AbstractUser):
         choices=UserRole.choices,
         default=UserRole.STUDENT,
     )
-    is_teacher_enabled = models.BooleanField(default=False)
     survey_completed = models.BooleanField(default=False)
+    preferred_time_from = models.TimeField(null=True, blank=True)
+    preferred_time_to = models.TimeField(null=True, blank=True)
+    preferred_weekdays = models.JSONField(default=list, blank=True)
+    preferred_dance_styles = models.JSONField(default=list, blank=True)
+    price_from = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    price_to = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = ["username"]
@@ -74,88 +75,23 @@ class User(AbstractUser):
         verbose_name_plural = "Пользователи"
 
 
-class TeacherProfile(TimeStampedModel):
-    user = models.OneToOneField(
+class UserFlag(models.Model):
+    user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
-        related_name="teacher_profile",
+        related_name="flags",
     )
-    bio = models.TextField(blank=True)
-    images = models.JSONField(default=list, blank=True)
-    experience_years = models.PositiveIntegerField(default=0)
-    rating_avg = models.DecimalField(max_digits=3, decimal_places=2, default=0)
-    rating_count = models.PositiveIntegerField(default=0)
+    name = models.CharField(max_length=128)
+    value = models.BooleanField(default=False)
 
     class Meta:
-        db_table = "teacher_profiles"
-        verbose_name = "Профиль преподавателя"
-        verbose_name_plural = "Профили преподавателей"
-
-    def __str__(self) -> str:
-        return f"{self.user.get_full_name() or self.user.email}"
-
-
-class TeacherAchievement(models.Model):
-    teacher = models.ForeignKey(
-        TeacherProfile,
-        on_delete=models.CASCADE,
-        related_name="achievements",
-    )
-    title = models.CharField(max_length=255)
-    description = models.TextField(blank=True)
-    achieved_at = models.DateField(null=True, blank=True)
-
-    class Meta:
-        db_table = "teacher_achievements"
-        verbose_name = "Достижение преподавателя"
-        verbose_name_plural = "Достижения преподавателей"
-
-    def __str__(self) -> str:
-        return self.title
-
-
-class UserPreference(TimeStampedModel):
-    user = models.OneToOneField(
-        User,
-        on_delete=models.CASCADE,
-        related_name="preferences",
-    )
-    city = models.ForeignKey(
-        "locations.City",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="user_preferences",
-    )
-    level = models.CharField(max_length=16, choices=DanceLevel.choices, blank=True)
-    preferred_time_from = models.TimeField(null=True, blank=True)
-    preferred_time_to = models.TimeField(null=True, blank=True)
-    price_from = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    price_to = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    goal = models.CharField(max_length=255, blank=True)
-
-    class Meta:
-        db_table = "user_preferences"
-        verbose_name = "Предпочтение пользователя"
-        verbose_name_plural = "Предпочтения пользователей"
-
-
-class UserPreferredWeekday(models.Model):
-    preference = models.ForeignKey(
-        UserPreference,
-        on_delete=models.CASCADE,
-        related_name="preferred_weekdays",
-    )
-    weekday = models.CharField(max_length=3, choices=Weekday.choices)
-
-    class Meta:
-        db_table = "user_preferred_weekdays"
-        verbose_name = "Предпочитаемый день"
-        verbose_name_plural = "Предпочитаемые дни"
+        db_table = "user_flags"
+        verbose_name = "Флаг пользователя"
+        verbose_name_plural = "Флаги пользователей"
         constraints = [
             models.UniqueConstraint(
-                fields=["preference", "weekday"],
-                name="unique_preferred_weekday_per_preference",
+                fields=["user", "name"],
+                name="unique_flag_per_user",
             )
         ]
 
@@ -183,6 +119,29 @@ class UserSkill(models.Model):
                 name="unique_skill_per_user_and_style",
             )
         ]
+
+
+class TeacherProfile(TimeStampedModel):
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="teacher_profile",
+    )
+    bio = models.TextField(blank=True)
+    experience_years = models.PositiveIntegerField(default=0)
+    images = models.JSONField(default=list, blank=True)
+    achievements = models.JSONField(default=list, blank=True)
+    specializations = models.JSONField(default=list, blank=True)
+    rating_avg = models.DecimalField(max_digits=3, decimal_places=2, default=0)
+    rating_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = "teachers"
+        verbose_name = "Профиль преподавателя"
+        verbose_name_plural = "Профили преподавателей"
+
+    def __str__(self) -> str:
+        return f"{self.user.get_full_name() or self.user.email}"
 
 
 class FavoriteTeacher(models.Model):
@@ -221,6 +180,11 @@ class TeacherReview(TimeStampedModel):
         on_delete=models.CASCADE,
         related_name="reviews",
     )
+    lesson = models.ForeignKey(
+        "courses.Lesson",
+        on_delete=models.CASCADE,
+        related_name="teacher_reviews",
+    )
     rating = models.PositiveSmallIntegerField()
     text = models.TextField(blank=True)
 
@@ -230,7 +194,7 @@ class TeacherReview(TimeStampedModel):
         verbose_name_plural = "Отзывы о преподавателях"
         constraints = [
             models.UniqueConstraint(
-                fields=["author_user", "teacher"],
-                name="unique_teacher_review_per_author",
+                fields=["author_user", "lesson"],
+                name="unique_teacher_review_per_user_lesson",
             )
         ]

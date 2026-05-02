@@ -1,44 +1,25 @@
-import json
-import uuid
-from pathlib import Path
-
-from django.core.files.storage import default_storage
 from django.utils import timezone
 from rest_framework import serializers
 
 from .constants import CourseLifecycleStatus
 from .lesson_utils import can_cancel_lesson, effective_lesson_status
 from .models import (
-    Attendance,
+    AttendanceMark,
     Course,
-    CourseImage,
-    CourseScheduleRule,
+    CourseSchedule,
     CourseStatus,
     DanceStyle,
-    Hall,
+    Enrollment,
     Lesson,
     LessonStatus,
-    Review,
     Studio,
 )
-from .seed_course_students import enroll_random_demo_students
 from .services import refresh_course_lessons_from_schedule
 
 
-def _build_absolute_url(value: str | None, request) -> str:
-    if not value:
-        return ""
-    if value.startswith(("http://", "https://")):
-        return value
-    if request is None:
-        return value
-    return request.build_absolute_uri(value)
-
-
-def _storage_url(path: str, request) -> str:
-    url = default_storage.url(path)
-    return _build_absolute_url(url, request)
-
+# ---------------------------------------------------------------------------
+# Reference
+# ---------------------------------------------------------------------------
 
 class DanceStyleSerializer(serializers.ModelSerializer):
     class Meta:
@@ -48,157 +29,95 @@ class DanceStyleSerializer(serializers.ModelSerializer):
 
 class StudioSerializer(serializers.ModelSerializer):
     city = serializers.CharField(source="city.name", read_only=True)
-    image = serializers.SerializerMethodField()
 
     class Meta:
         model = Studio
-        fields = (
-            "id",
-            "name",
-            "city",
-            "address",
-            "metro",
-            "lat",
-            "lng",
-            "image",
-        )
-
-    def get_image(self, obj: Studio) -> str:
-        request = self.context.get("request")
-        return _build_absolute_url(obj.image, request)
-
-
-class HallShortSerializer(serializers.Serializer):
-    id = serializers.IntegerField()
-    name = serializers.CharField()
-    capacity = serializers.IntegerField(allow_null=True)
+        fields = ("id", "name", "city", "address", "metro", "lat", "lng", "image", "halls_count")
 
 
 class StudioDetailSerializer(StudioSerializer):
-    halls = serializers.SerializerMethodField()
     courses_count = serializers.IntegerField(read_only=True)
 
     class Meta(StudioSerializer.Meta):
-        fields = StudioSerializer.Meta.fields + (
-            "courses_count",
-            "halls",
-        )
-
-    def get_halls(self, obj: Studio) -> list[dict]:
-        return [
-            {
-                "id": hall.id,
-                "name": hall.name,
-                "capacity": hall.capacity,
-            }
-            for hall in obj.halls.all().order_by("name")
-        ]
+        fields = StudioSerializer.Meta.fields + ("courses_count",)
 
 
 class MapPointSerializer(serializers.ModelSerializer):
     city = serializers.CharField(source="city.name", read_only=True)
-    halls_count = serializers.IntegerField(read_only=True)
     active_courses_count = serializers.IntegerField(read_only=True)
-    dance_styles = serializers.SerializerMethodField()
 
     class Meta:
         model = Studio
-        fields = (
-            "id",
-            "name",
-            "city",
-            "address",
-            "metro",
-            "lat",
-            "lng",
-            "image",
-            "halls_count",
-            "active_courses_count",
-            "dance_styles",
-        )
-
-    def get_dance_styles(self, obj: Studio) -> list[str]:
-        styles = obj.courses.select_related("dance_style").values_list("dance_style__name", flat=True).distinct()
-        return list(styles)
+        fields = ("id", "name", "city", "address", "metro", "lat", "lng", "image", "halls_count", "active_courses_count")
 
 
-WEEKDAY_TO_RU = {
-    "mon": "Пн",
-    "tue": "Вт",
-    "wed": "Ср",
-    "thu": "Чт",
-    "fri": "Пт",
-    "sat": "Сб",
-    "sun": "Вс",
-}
-WEEKDAY_ORDER = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+# ---------------------------------------------------------------------------
+# Schedule / Lesson
+# ---------------------------------------------------------------------------
+
+class CourseScheduleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CourseSchedule
+        fields = ("id", "weekday", "time_from", "time_to", "location_text")
 
 
-class CourseScheduleRuleSerializer(serializers.ModelSerializer):
-    hall = serializers.CharField(source="hall.name", read_only=True)
+class CourseScheduleWriteSerializer(serializers.Serializer):
+    weekday = serializers.ChoiceField(choices=["mon", "tue", "wed", "thu", "fri", "sat", "sun"])
+    time_from = serializers.TimeField()
+    time_to = serializers.TimeField()
+    location_text = serializers.CharField(max_length=255, required=False, default="")
+
+
+class LessonSerializer(serializers.ModelSerializer):
+    status = serializers.SerializerMethodField()
+    can_cancel = serializers.SerializerMethodField()
 
     class Meta:
-        model = CourseScheduleRule
+        model = Lesson
         fields = (
             "id",
-            "weekday",
+            "course",
+            "lesson_date",
             "time_from",
             "time_to",
-            "hall",
             "location_text",
+            "hall",
+            "status",
+            "can_cancel",
         )
 
+    def get_status(self, obj: Lesson) -> str:
+        return effective_lesson_status(obj)
 
-def _format_schedule(course: Course, include_location: bool = False) -> list[dict]:
-    """Формат расписания для списка и детальной карточки курса."""
-    rules = list(course.schedule_rules.order_by("time_from", "weekday"))
-    if not rules:
-        return []
-
-    grouped: dict[tuple, list[str]] = {}
-    for r in rules:
-        key = (r.time_from.strftime("%H:%M"), r.time_to.strftime("%H:%M"), r.location_text or "")
-        if key not in grouped:
-            grouped[key] = []
-        grouped[key].append(r.weekday)
-
-    result = []
-    for (time_from, time_to, location), weekdays in grouped.items():
-        sorted_ru = [
-            WEEKDAY_TO_RU[w]
-            for w in sorted(weekdays, key=lambda x: WEEKDAY_ORDER.index(x) if x in WEEKDAY_ORDER else 99)
-        ]
-        item = {
-            "weekday": ", ".join(sorted_ru),
-            "time_from": time_from,
-            "time_to": time_to,
-        }
-        if include_location:
-            item["location"] = location or None
-
-        result.append(item)
-    return result
+    def get_can_cancel(self, obj: Lesson) -> bool:
+        ok, _ = can_cancel_lesson(obj)
+        return ok
 
 
-def _get_images_list(course: Course, request=None) -> list[str]:
-    """Массив URL изображений (формат cards.ts: images: string[])."""
-    imgs = list(course.images.all().order_by("sort_order", "id"))
-    if imgs:
-        return [_build_absolute_url(img.image, request) for img in imgs]
-    if course.image_cover:
-        return [_build_absolute_url(course.image_cover, request)]
-    return []
+class LessonWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Lesson
+        fields = ("lesson_date", "time_from", "time_to", "location_text", "hall", "status")
+
+
+# ---------------------------------------------------------------------------
+# Course list / detail / write
+# ---------------------------------------------------------------------------
+
+class TeacherShortSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    first_name = serializers.CharField()
+    last_name = serializers.CharField()
+    middle_name = serializers.CharField()
+    avatar = serializers.URLField()
 
 
 class CourseListSerializer(serializers.ModelSerializer):
+    teacher = serializers.SerializerMethodField()
+    dance_style = DanceStyleSerializer(read_only=True)
+    studio = StudioSerializer(read_only=True)
+    schedule = CourseScheduleSerializer(source="schedule_rules", many=True, read_only=True)
     status = serializers.SerializerMethodField()
-    teacher_id = serializers.IntegerField(source="teacher.id", read_only=True)
-    teacher_name = serializers.SerializerMethodField()
-    dance_style = serializers.CharField(source="dance_style.name", read_only=True)
-    city = serializers.SerializerMethodField()
-    studio = serializers.SerializerMethodField()
-    schedule = serializers.SerializerMethodField()
-    image = serializers.SerializerMethodField()
     spots_left = serializers.SerializerMethodField()
 
     class Meta:
@@ -206,68 +125,10 @@ class CourseListSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "name",
-            "level",
-            "price",
-            "date_from",
-            "date_to",
-            "status",
-            "image",
-            "teacher_id",
-            "teacher_name",
-            "dance_style",
-            "city",
-            "studio",
-            "schedule",
-            "spots_left",
-        )
-
-    def get_city(self, obj: Course) -> str:
-        return obj.studio.city.name if obj.studio and obj.studio.city else ""
-
-    def get_studio(self, obj: Course) -> str:
-        return obj.studio.name if obj.studio else ""
-
-    def get_schedule(self, obj: Course) -> list[dict]:
-        return _format_schedule(obj)
-
-    def get_image(self, obj: Course) -> str:
-        request = self.context.get("request")
-        images = _get_images_list(obj, request)
-        return images[0] if images else ""
-
-    def get_teacher_name(self, obj: Course) -> str:
-        return obj.teacher.user.get_full_name() or obj.teacher.user.email
-
-    def get_spots_left(self, obj: Course) -> int:
-        active = obj.enrollments.filter(status="active").count()
-        return max(0, obj.capacity - active)
-
-    def get_status(self, obj: Course) -> str:
-        """Витрина: active | completed | cancelled; завершение/отмена из БД имеют приоритет над датами."""
-        if obj.status == CourseStatus.COMPLETED:
-            return CourseLifecycleStatus.COMPLETED
-        if obj.status == CourseStatus.CANCELLED:
-            return "cancelled"
-        if hasattr(obj, "activity_status"):
-            return obj.activity_status
-        today = timezone.localdate()
-        return (
-            CourseLifecycleStatus.COMPLETED
-            if obj.date_to < today
-            else CourseLifecycleStatus.ACTIVE
-        )
-
-
-class CourseDetailSerializer(CourseListSerializer):
-    music = serializers.SerializerMethodField()
-    images = serializers.SerializerMethodField()
-    schedule = serializers.SerializerMethodField()
-
-    class Meta(CourseListSerializer.Meta):
-        fields = (
-            "id",
-            "name",
             "description",
+            "teacher",
+            "dance_style",
+            "studio",
             "level",
             "price",
             "capacity",
@@ -276,157 +137,175 @@ class CourseDetailSerializer(CourseListSerializer):
             "date_to",
             "status",
             "images",
-            "teacher_id",
-            "teacher_name",
-            "dance_style",
-            "city",
-            "studio",
+            "image_cover",
+            "music_artist",
+            "music_track",
+            "music_url",
             "schedule",
-            "music",
         )
 
-    def get_schedule(self, obj: Course) -> list[dict]:
-        return _format_schedule(obj, include_location=True)
-
-    def get_music(self, obj: Course) -> dict:
+    def get_teacher(self, obj):
+        u = obj.teacher.user
         return {
-            "artist": obj.music_artist or "",
-            "track": obj.music_track or "",
-            "url": obj.music_url or "",
+            "id": obj.teacher.id,
+            "first_name": u.first_name,
+            "last_name": u.last_name,
+            "middle_name": u.middle_name,
+            "avatar": u.avatar,
         }
 
-    def get_images(self, obj: Course) -> list[str]:
-        request = self.context.get("request")
-        return _get_images_list(obj, request)
+    def get_status(self, obj) -> str:
+        today = timezone.localdate()
+        if obj.date_to < today:
+            return CourseLifecycleStatus.COMPLETED
+        return CourseLifecycleStatus.ACTIVE
+
+    def get_spots_left(self, obj) -> int:
+        active_count = obj.enrollments.filter(
+            status__in=["active", "pending", "completed"]
+        ).count()
+        return max(0, obj.capacity - active_count)
 
 
+class CourseDetailSerializer(CourseListSerializer):
+    pass
 
-class LessonSerializer(serializers.ModelSerializer):
-    course_id = serializers.IntegerField(source="course.id", read_only=True)
-    course_name = serializers.CharField(source="course.name", read_only=True)
-    teacher_name = serializers.SerializerMethodField()
-    hall = serializers.CharField(source="hall.name", read_only=True)
-    studio = serializers.CharField(source="course.studio.name", read_only=True)
-    city = serializers.CharField(source="course.studio.city.name", read_only=True)
 
-    class Meta:
-        model = Lesson
-        fields = (
-            "id",
-            "course_id",
-            "course_name",
-            "teacher_name",
-            "lesson_date",
-            "time_from",
-            "time_to",
-            "location_text",
-            "status",
-            "hall",
-            "studio",
-            "city",
-        )
+class CourseWriteSerializer(serializers.Serializer):
+    dance_style_id = serializers.IntegerField()
+    studio_id = serializers.IntegerField(required=False, allow_null=True)
+    name = serializers.CharField(max_length=255)
+    description = serializers.CharField(required=False, default="")
+    level = serializers.ChoiceField(choices=["beginner", "intermediate", "advanced"])
+    price = serializers.DecimalField(max_digits=10, decimal_places=2)
+    capacity = serializers.IntegerField(min_value=1)
+    date_from = serializers.DateField()
+    date_to = serializers.DateField()
+    status = serializers.ChoiceField(
+        choices=CourseStatus.values,
+        required=False,
+        default=CourseStatus.PUBLISHED,
+    )
+    images = serializers.ListField(child=serializers.URLField(), required=False, default=list)
+    image_cover = serializers.URLField(required=False, default="")
+    music_artist = serializers.CharField(max_length=255, required=False, default="")
+    music_track = serializers.CharField(max_length=255, required=False, default="")
+    music_url = serializers.URLField(required=False, default="")
+    schedule = CourseScheduleWriteSerializer(many=True, required=False, default=list)
+    teacher_id = serializers.IntegerField(required=False, allow_null=True)
 
-    def get_teacher_name(self, obj: Lesson) -> str:
-        return obj.course.teacher.user.get_full_name() or obj.course.teacher.user.email
-
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        data["status"] = effective_lesson_status(instance)
+    def validate(self, data):
+        if data.get("date_from") and data.get("date_to"):
+            if data["date_from"] > data["date_to"]:
+                raise serializers.ValidationError("date_from must be before date_to.")
         return data
 
+    def _get_dance_style(self, dance_style_id):
+        from .models import DanceStyle as DS
+        try:
+            return DS.objects.get(id=dance_style_id)
+        except DS.DoesNotExist:
+            raise serializers.ValidationError({"dance_style_id": "Dance style not found."})
 
-class CalendarEventSerializer(serializers.ModelSerializer):
-    course_id = serializers.IntegerField(source="course.id", read_only=True)
-    course_name = serializers.CharField(source="course.name", read_only=True)
-    teacher_name = serializers.SerializerMethodField()
-    dance_style = serializers.CharField(source="course.dance_style.name", read_only=True)
-    studio = serializers.CharField(source="course.studio.name", read_only=True)
-    city = serializers.CharField(source="course.studio.city.name", read_only=True)
-    start = serializers.SerializerMethodField()
-    end = serializers.SerializerMethodField()
+    def _get_studio(self, studio_id):
+        if studio_id is None:
+            return None
+        try:
+            return Studio.objects.get(id=studio_id)
+        except Studio.DoesNotExist:
+            raise serializers.ValidationError({"studio_id": "Studio not found."})
 
-    class Meta:
-        model = Lesson
-        fields = (
-            "id",
-            "course_id",
-            "course_name",
-            "teacher_name",
-            "dance_style",
-            "lesson_date",
-            "time_from",
-            "time_to",
-            "start",
-            "end",
-            "location_text",
-            "status",
-            "studio",
-            "city",
+    def create(self, validated_data):
+        schedule_data = validated_data.pop("schedule", [])
+        validated_data.pop("teacher_id", None)
+        dance_style = self._get_dance_style(validated_data.pop("dance_style_id"))
+        studio = self._get_studio(validated_data.pop("studio_id", None))
+
+        course = Course.objects.create(
+            dance_style=dance_style,
+            studio=studio,
+            **validated_data,
         )
 
-    def get_teacher_name(self, obj: Lesson) -> str:
-        return obj.course.teacher.user.get_full_name() or obj.course.teacher.user.email
+        for item in schedule_data:
+            CourseSchedule.objects.create(course=course, **item)
 
-    def get_start(self, obj: Lesson) -> str:
-        return f"{obj.lesson_date}T{obj.time_from}"
+        refresh_course_lessons_from_schedule(course)
+        return course
 
-    def get_end(self, obj: Lesson) -> str:
-        return f"{obj.lesson_date}T{obj.time_to}"
+    def update(self, instance, validated_data):
+        schedule_data = validated_data.pop("schedule", None)
+        validated_data.pop("teacher_id", None)
 
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        data["status"] = effective_lesson_status(instance)
-        return data
+        if "dance_style_id" in validated_data:
+            instance.dance_style = self._get_dance_style(validated_data.pop("dance_style_id"))
+        if "studio_id" in validated_data:
+            instance.studio = self._get_studio(validated_data.pop("studio_id"))
 
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        if schedule_data is not None:
+            instance.schedule_rules.all().delete()
+            for item in schedule_data:
+                CourseSchedule.objects.create(course=instance, **item)
+            refresh_course_lessons_from_schedule(instance)
+
+        return instance
+
+
+# ---------------------------------------------------------------------------
+# Enrollment / Students
+# ---------------------------------------------------------------------------
+
+class CourseStudentSerializer(serializers.ModelSerializer):
+    student_id = serializers.IntegerField(source="user.id")
+    email = serializers.EmailField(source="user.email")
+    first_name = serializers.CharField(source="user.first_name")
+    last_name = serializers.CharField(source="user.last_name")
+    middle_name = serializers.CharField(source="user.middle_name")
+    avatar = serializers.URLField(source="user.avatar")
+
+    class Meta:
+        model = Enrollment
+        fields = (
+            "student_id",
+            "email",
+            "first_name",
+            "last_name",
+            "middle_name",
+            "avatar",
+            "status",
+            "paid",
+            "enrolled_at",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Attendance
+# ---------------------------------------------------------------------------
 
 class AttendanceSerializer(serializers.ModelSerializer):
-    lesson_id = serializers.IntegerField(source="lesson.id", read_only=True)
-    lesson_date = serializers.DateField(source="lesson.lesson_date", read_only=True)
-    course_id = serializers.IntegerField(source="lesson.course.id", read_only=True)
-    course_name = serializers.CharField(source="lesson.course.name", read_only=True)
-    student_id = serializers.IntegerField(source="student.id", read_only=True)
+    student_id = serializers.IntegerField(source="student.id")
     student_name = serializers.SerializerMethodField()
 
     class Meta:
-        model = Attendance
-        fields = (
-            "id",
-            "lesson_id",
-            "lesson_date",
-            "course_id",
-            "course_name",
-            "student_id",
-            "student_name",
-            "status",
-            "marked_at",
-        )
+        model = AttendanceMark
+        fields = ("id", "lesson", "student_id", "student_name", "status", "marked_at")
 
-    def get_student_name(self, obj: Attendance) -> str:
+    def get_student_name(self, obj) -> str:
         return obj.student.get_full_name() or obj.student.email
 
 
 class AttendanceMarkSerializer(serializers.Serializer):
     student_id = serializers.IntegerField()
-    status = serializers.ChoiceField(choices=Attendance._meta.get_field("status").choices)
+    status = serializers.ChoiceField(choices=["present", "absent"])
 
 
-class CourseAttendancePerLessonStatsSerializer(serializers.Serializer):
-    lesson_id = serializers.IntegerField()
-    date = serializers.DateField()
-    present = serializers.IntegerField()
-    absent = serializers.IntegerField()
-    total = serializers.IntegerField()
-    percent = serializers.IntegerField()
-
-
-class CourseAttendancePerStudentStatsSerializer(serializers.Serializer):
-    student_id = serializers.IntegerField()
-    student_name = serializers.CharField()
-    attended = serializers.IntegerField()
-    missed = serializers.IntegerField()
-    total = serializers.IntegerField()
-    percent = serializers.IntegerField()
-
+# ---------------------------------------------------------------------------
+# Attendance stats (delegated to stats_service)
+# ---------------------------------------------------------------------------
 
 class CourseAttendanceStatsSerializer(serializers.Serializer):
     total_lessons = serializers.IntegerField()
@@ -434,320 +313,45 @@ class CourseAttendanceStatsSerializer(serializers.Serializer):
     cancelled_lessons = serializers.IntegerField()
     avg_attendance_percent = serializers.IntegerField()
     total_students = serializers.IntegerField()
-    per_lesson = CourseAttendancePerLessonStatsSerializer(many=True)
-    per_student = CourseAttendancePerStudentStatsSerializer(many=True)
+    per_lesson = serializers.ListField()
+    per_student = serializers.ListField()
 
 
-class CourseStudentSerializer(serializers.Serializer):
-    enrollment_id = serializers.IntegerField(source="id")
-    user_id = serializers.IntegerField(source="user.id")
-    full_name = serializers.SerializerMethodField()
-    email = serializers.EmailField(source="user.email")
-    phone = serializers.CharField(source="user.phone")
-    dance_level = serializers.CharField(source="user.dance_level")
-    enrolled_at = serializers.DateField()
-    status = serializers.CharField()
-    paid = serializers.BooleanField()
+# ---------------------------------------------------------------------------
+# Calendar
+# ---------------------------------------------------------------------------
 
-    def get_full_name(self, obj) -> str:
-        return obj.user.get_full_name() or obj.user.email
-
-
-class CourseReviewCreateSerializer(serializers.Serializer):
-    rating = serializers.IntegerField(min_value=1, max_value=5)
-    text = serializers.CharField(required=False, allow_blank=True)
-
-
-class CourseReviewSerializer(serializers.ModelSerializer):
-    author_name = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Review
-        fields = ("id", "author_name", "rating", "text", "created_at")
-
-    def get_author_name(self, obj) -> str:
-        return obj.author_user.get_full_name() or obj.author_user.email
-
-
-class CourseScheduleRuleWriteSerializer(serializers.Serializer):
-    weekday = serializers.ChoiceField(choices=CourseScheduleRule._meta.get_field("weekday").choices)
-    time_from = serializers.TimeField()
-    time_to = serializers.TimeField()
-    hall_id = serializers.PrimaryKeyRelatedField(
-        source="hall",
-        queryset=Hall.objects.all(),
-        allow_null=True,
-        required=False,
-    )
-    location_text = serializers.CharField(required=False, allow_blank=True)
-
-
-class CourseWriteSerializer(serializers.ModelSerializer):
-    teacher_id = serializers.IntegerField(write_only=True, required=False)
-    image_file = serializers.FileField(write_only=True, required=False)
-    image_files = serializers.ListField(
-        child=serializers.FileField(),
-        write_only=True,
-        required=False,
-    )
-    music_artist = serializers.CharField(write_only=True, required=False, allow_blank=True)
-    music_track = serializers.CharField(write_only=True, required=False, allow_blank=True)
-    music_url = serializers.URLField(write_only=True, required=False, allow_blank=True)
-    dance_style_id = serializers.PrimaryKeyRelatedField(
-        source="dance_style",
-        queryset=DanceStyle.objects.all(),
-    )
-    studio_id = serializers.PrimaryKeyRelatedField(
-        source="studio",
-        queryset=Studio.objects.all(),
-        allow_null=True,
-        required=False,
-    )
-    hall_id = serializers.PrimaryKeyRelatedField(
-        source="hall",
-        queryset=Hall.objects.all(),
-        allow_null=True,
-        required=False,
-    )
-    schedule = CourseScheduleRuleWriteSerializer(many=True, required=False)
-    ordered_image_urls = serializers.ListField(
-        child=serializers.URLField(),
-        write_only=True,
-        required=False,
-    )
-
-    class Meta:
-        model = Course
-        fields = (
-            "teacher_id",
-            "dance_style_id",
-            "studio_id",
-            "hall_id",
-            "name",
-            "description",
-            "level",
-            "price",
-            "capacity",
-            "date_from",
-            "date_to",
-            "status",
-            "image_cover",
-            "image_file",
-            "image_files",
-            "ordered_image_urls",
-            "music_artist",
-            "music_track",
-            "music_url",
-            "schedule",
-        )
-        extra_kwargs = {
-            "image_cover": {
-                "required": False,
-                "allow_null": True,
-                "allow_blank": True,
-            }
-        }
-
-    def validate(self, attrs):
-        instance = self.instance
-        if instance is None:
-            return attrs
-
-        new_status = attrs.get("status")
-        if new_status is None:
-            return attrs
-
-        if new_status == CourseStatus.COMPLETED and instance.status in (
-            CourseStatus.COMPLETED,
-            CourseStatus.CANCELLED,
-        ):
-            raise serializers.ValidationError(
-                {"status": "Курс уже завершён или отменён."}
-            )
-
-        return attrs
-
-    def to_internal_value(self, data):
-        mutable_data = data.copy()
-        schedule = mutable_data.get("schedule")
-
-        if isinstance(schedule, str):
-            mutable_data["schedule"] = json.loads(schedule)
-
-        request = self.context.get("request")
-        if request is not None:
-            uploaded_images = request.FILES.getlist("image_files")
-            if uploaded_images:
-                mutable_data.setlist("image_files", uploaded_images)
-
-        return super().to_internal_value(mutable_data)
-
-    def create(self, validated_data):
-        image_file = validated_data.pop("image_file", None)
-        image_files = validated_data.pop("image_files", [])
-        validated_data.pop("ordered_image_urls", None)
-        schedule_data = validated_data.pop("schedule", [])
-        self._apply_uploaded_image(validated_data, image_file)
-        if validated_data.get("image_cover") is None:
-            validated_data["image_cover"] = ""
-        course = super().create(validated_data)
-        self._save_uploaded_images(course, image_files)
-        self._save_schedule(course, schedule_data)
-        refresh_course_lessons_from_schedule(course)
-        enroll_random_demo_students(course)
-        return course
-
-    def update(self, instance, validated_data):
-        image_file = validated_data.pop("image_file", None)
-        image_files = validated_data.pop("image_files", [])
-        ordered_image_urls = validated_data.pop("ordered_image_urls", None)
-        schedule_data = validated_data.pop("schedule", None)
-        date_bounds_changed = ("date_from" in validated_data) or ("date_to" in validated_data)
-        self._apply_uploaded_image(validated_data, image_file)
-        if validated_data.get("image_cover") is None:
-            validated_data["image_cover"] = ""
-        course = super().update(instance, validated_data)
-        if image_files:
-            self._save_uploaded_images(course, image_files, replace_existing=True)
-        elif ordered_image_urls:
-            self._apply_ordered_gallery_urls(course, ordered_image_urls)
-        if schedule_data is not None:
-            self._save_schedule(course, schedule_data)
-
-        if schedule_data is not None or date_bounds_changed:
-            refresh_course_lessons_from_schedule(course)
-        return course
-
-    def _save_schedule(self, course: Course, schedule_data: list[dict]) -> None:
-        course.schedule_rules.all().delete()
-        if not schedule_data:
-            return
-
-        CourseScheduleRule.objects.bulk_create(
-            [
-                CourseScheduleRule(
-                    course=course,
-                    weekday=item["weekday"],
-                    time_from=item["time_from"],
-                    time_to=item["time_to"],
-                    hall=item.get("hall"),
-                    location_text=item.get("location_text", ""),
-                )
-                for item in schedule_data
-            ]
-        )
-
-    @staticmethod
-    def _urls_equal_for_gallery(stored: str, client: str) -> bool:
-        a = (stored or "").strip().rstrip("/")
-        b = (client or "").strip().rstrip("/")
-        if a == b:
-            return True
-        return Path(a).name == Path(b).name
-
-    def _apply_ordered_gallery_urls(self, course: Course, urls: list[str]) -> None:
-        if not urls:
-            return
-
-        remaining = list(course.images.all())
-        for index, url in enumerate(urls):
-            match = None
-            for ci in remaining:
-                if self._urls_equal_for_gallery(ci.image, url):
-                    match = ci
-                    break
-            if match is None:
-                continue
-            if match.sort_order != index:
-                match.sort_order = index
-                match.save(update_fields=["sort_order"])
-            remaining.remove(match)
-
-        course.image_cover = urls[0]
-        course.save(update_fields=["image_cover"])
-
-    def _save_uploaded_images(
-        self,
-        course: Course,
-        image_files: list,
-        replace_existing: bool = False,
-    ) -> None:
-        if not image_files:
-            return
-
-        if replace_existing:
-            course.images.all().delete()
-
-        image_urls = [self._store_uploaded_file(image_file) for image_file in image_files]
-
-        CourseImage.objects.bulk_create(
-            [
-                CourseImage(
-                    course=course,
-                    image=image_url,
-                    sort_order=index,
-                )
-                for index, image_url in enumerate(image_urls)
-            ]
-        )
-
-        course.image_cover = image_urls[0]
-        course.save(update_fields=["image_cover"])
-
-    def _apply_uploaded_image(self, validated_data: dict, image_file) -> None:
-        if not image_file:
-            return
-
-        validated_data["image_cover"] = self._store_uploaded_file(image_file)
-
-    def _store_uploaded_file(self, image_file) -> str:
-        extension = Path(image_file.name).suffix or ".jpg"
-        filename = f"courses/{uuid.uuid4().hex}{extension}"
-        stored_path = default_storage.save(filename, image_file)
-        request = self.context.get("request")
-        return _storage_url(stored_path, request)
-
-
-class LessonWriteSerializer(serializers.ModelSerializer):
-    schedule_rule_id = serializers.PrimaryKeyRelatedField(
-        source="schedule_rule",
-        queryset=CourseScheduleRule.objects.all(),
-        allow_null=True,
-        required=False,
-    )
-    hall_id = serializers.PrimaryKeyRelatedField(
-        source="hall",
-        queryset=Hall.objects.all(),
-        allow_null=True,
-        required=False,
-    )
+class CalendarEventSerializer(serializers.ModelSerializer):
+    course_id = serializers.IntegerField(source="course.id")
+    course_name = serializers.CharField(source="course.name")
+    dance_style = serializers.CharField(source="course.dance_style.name")
+    teacher_name = serializers.SerializerMethodField()
+    studio_name = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
 
     class Meta:
         model = Lesson
         fields = (
-            "schedule_rule_id",
-            "hall_id",
+            "id",
+            "course_id",
+            "course_name",
+            "dance_style",
+            "teacher_name",
+            "studio_name",
             "lesson_date",
             "time_from",
             "time_to",
             "location_text",
+            "hall",
             "status",
         )
 
-    def validate(self, attrs):
-        instance = self.instance
-        if instance is None:
-            return attrs
+    def get_teacher_name(self, obj) -> str:
+        u = obj.course.teacher.user
+        return u.get_full_name() or u.email
 
-        new_status = attrs.get("status")
-        if new_status != LessonStatus.CANCELLED:
-            return attrs
+    def get_studio_name(self, obj) -> str:
+        return obj.course.studio.name if obj.course.studio else ""
 
-        if instance.status == LessonStatus.CANCELLED:
-            return attrs
-
-        can_cancel, msg = can_cancel_lesson(instance)
-        if not can_cancel and msg:
-            raise serializers.ValidationError({"status": msg})
-
-        return attrs
+    def get_status(self, obj) -> str:
+        return effective_lesson_status(obj)

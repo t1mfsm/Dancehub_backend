@@ -38,8 +38,7 @@ def generate_course_lessons(course: Course) -> int:
                 time_from=rule.time_from,
                 time_to=rule.time_to,
                 defaults={
-                    "schedule_rule": rule,
-                    "hall": rule.hall or course.hall,
+                    "schedule": rule,
                     "location_text": rule.location_text,
                 },
             )
@@ -62,5 +61,4 @@ def prune_lessons_outside_course_dates(course: Course) -> None:
 def refresh_course_lessons_from_schedule(course: Course) -> int:
     """Remove out-of-window lessons, then append missing lesson rows from schedule rules."""
     prune_lessons_outside_course_dates(course)
-
     return generate_course_lessons(course)

@@ -6,11 +6,11 @@ from typing import Any, Optional
 from django.db.models import QuerySet
 
 from apps.courses.lesson_utils import lesson_has_ended
-from apps.courses.models import Attendance, Course, Enrollment, EnrollmentStatus, Lesson, LessonStatus
+from apps.courses.models import AttendanceMark, Course, Enrollment, EnrollmentStatus, Lesson, LessonStatus
 
 
 def _presence_statuses_present(status: str) -> bool:
-    return status in ("present", "late")
+    return status == "present"
 
 
 def build_course_attendance_stats(
@@ -54,7 +54,7 @@ def build_course_attendance_stats(
     enrollment_list = list(enrollees)
     student_count = len(enrollment_list)
 
-    att_qs: QuerySet[Attendance] = Attendance.objects.filter(lesson__course=course)
+    att_qs: QuerySet[AttendanceMark] = AttendanceMark.objects.filter(lesson__course=course)
 
     if date_from is not None:
         att_qs = att_qs.filter(lesson__lesson_date__gte=date_from)
@@ -62,7 +62,7 @@ def build_course_attendance_stats(
     if date_to is not None:
         att_qs = att_qs.filter(lesson__lesson_date__lte=date_to)
 
-    attendance_records = list(att_qs.select_related("lesson", "student"))
+    attendance_records = list(att_qs.select_related("lesson", "student"))  # type: ignore[assignment]
 
     per_lesson: list[dict[str, Any]] = []
 
