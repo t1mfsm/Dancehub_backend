@@ -13,7 +13,6 @@ class User(models.Model):
     first_name = models.TextField()
     middle_name = models.TextField(default="", blank=True)
     last_name = models.TextField()
-    phone = models.TextField(null=True, blank=True)
     password_hash = models.TextField()
     avatar = models.TextField(null=True, blank=True)
     city = models.ForeignKey(
@@ -153,3 +152,36 @@ class TeacherReview(models.Model):
         unique_together = [("user", "lesson")]
         verbose_name = "Отзыв о преподавателе"
         verbose_name_plural = "Отзывы о преподавателях"
+
+
+class Notification(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="notifications", db_column="user_id")
+    kind = models.TextField()
+    title = models.TextField()
+    body = models.TextField()
+    course = models.ForeignKey(
+        "courses.Course",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="notifications",
+        db_column="course_id",
+    )
+    lesson = models.ForeignKey(
+        "courses.Lesson",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="notifications",
+        db_column="lesson_id",
+    )
+    read_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "notifications"
+        managed = False
+        ordering = ["-created_at", "-id"]
+        verbose_name = "Уведомление"
+        verbose_name_plural = "Уведомления"

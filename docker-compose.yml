@@ -39,6 +39,34 @@ services:
       minio-init:
         condition: service_completed_successfully
 
+  scheduler:
+    build:
+      context: ./backend
+    container_name: dancehub_scheduler
+    command: >
+      sh -c "until python manage.py send_lesson_reminders --hours-ahead 24 --window-minutes 15; do
+        sleep 30;
+      done;
+      while true; do
+        sleep 900;
+        python manage.py send_lesson_reminders --hours-ahead 24 --window-minutes 15;
+      done"
+    volumes:
+      - ./backend:/app
+      - ../f2e-front/src/assets:/app/frontend_assets:ro
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
   minio:
     image: minio/minio:latest
     container_name: dancehub_minio

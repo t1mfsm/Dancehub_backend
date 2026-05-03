@@ -5,7 +5,7 @@ from rest_framework import serializers
 from apps.common.choices import DanceLevel, UserRole, WeekdayCode
 from apps.common.files import persist_image_reference
 from apps.common.utils import absolutize_media_url, build_full_name
-from apps.users.models import TeacherProfile, User
+from apps.users.models import Notification, TeacherProfile, User
 
 
 def create_user_record(
@@ -15,7 +15,6 @@ def create_user_record(
     first_name: str,
     middle_name: str = "",
     last_name: str,
-    phone: str | None = None,
     password_hash: str,
     role: str = UserRole.STUDENT,
     survey_completed: bool = False,
@@ -38,7 +37,6 @@ def create_user_record(
                 first_name,
                 middle_name,
                 last_name,
-                phone,
                 password_hash,
                 avatar,
                 city_id,
@@ -53,7 +51,7 @@ def create_user_record(
                 price_to
             )
             VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 %s::weekday_code[],
                 %s::text[],
                 %s, %s
@@ -66,7 +64,6 @@ def create_user_record(
                 first_name,
                 middle_name,
                 last_name,
-                phone,
                 password_hash,
                 avatar,
                 city_id,
@@ -207,6 +204,19 @@ def serialize_user(user: User, request=None, teacher: TeacherProfile | None = No
     }
 
 
+def serialize_notification(notification: Notification) -> dict:
+    return {
+        "id": notification.id,
+        "kind": notification.kind,
+        "title": notification.title,
+        "body": notification.body,
+        "course_id": notification.course_id,
+        "lesson_id": notification.lesson_id,
+        "read_at": notification.read_at.isoformat() if notification.read_at else None,
+        "created_at": notification.created_at.isoformat(),
+    }
+
+
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField()
@@ -218,7 +228,6 @@ class RegisterSerializer(serializers.Serializer):
     first_name = serializers.CharField()
     middle_name = serializers.CharField(required=False, allow_blank=True, default="")
     last_name = serializers.CharField()
-    phone = serializers.CharField(required=False, allow_blank=True, default="")
     password = serializers.CharField(min_length=8)
     password_confirm = serializers.CharField(min_length=8)
 
@@ -240,7 +249,6 @@ class RegisterSerializer(serializers.Serializer):
             first_name=validated_data["first_name"],
             middle_name=validated_data.get("middle_name", ""),
             last_name=validated_data["last_name"],
-            phone=validated_data.get("phone") or None,
             password_hash=make_password(raw_password),
             role=UserRole.STUDENT,
             survey_completed=False,
@@ -260,7 +268,6 @@ class UserUpdateSerializer(serializers.Serializer):
     first_name = serializers.CharField(required=False)
     middle_name = serializers.CharField(required=False, allow_blank=True)
     last_name = serializers.CharField(required=False)
-    phone = serializers.CharField(required=False, allow_blank=True)
     survey_completed = serializers.BooleanField(required=False)
     avatar_file = serializers.ImageField(required=False)
     city = serializers.CharField(required=False, allow_blank=True)
@@ -317,3 +324,7 @@ class TeacherProfileUpdateSerializer(serializers.Serializer):
     def normalize_images(self, folder: str) -> list[str]:
         raw_images = self.validated_data.get("images", [])
         return [persist_image_reference(image, folder) for image in raw_images if image]
+
+
+class NotificationReadSerializer(serializers.Serializer):
+    read = serializers.BooleanField()

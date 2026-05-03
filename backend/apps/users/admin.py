@@ -2,14 +2,14 @@ from django.contrib import admin
 from django.db.models import Avg
 
 from .admin_views import FavoriteTeacherAdminView, UserFlagAdminView, UserSkillAdminView
-from .models import TeacherProfile, TeacherReview, User
+from .models import Notification, TeacherProfile, TeacherReview, User
 
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
     list_display = ("id", "email", "username", "first_name", "last_name", "role", "city", "survey_completed")
     list_filter = ("role", "survey_completed", "dance_level", "city")
-    search_fields = ("email", "username", "first_name", "middle_name", "last_name", "phone")
+    search_fields = ("email", "username", "first_name", "middle_name", "last_name")
     ordering = ("id",)
     readonly_fields = ("password_hash",)
 
@@ -35,6 +35,14 @@ class TeacherReviewAdmin(admin.ModelAdmin):
     list_filter = ("rating", "created_at")
     search_fields = ("teacher__user__email", "user__email", "text")
     ordering = ("-created_at",)
+
+
+@admin.register(Notification)
+class NotificationAdmin(admin.ModelAdmin):
+    list_display = ("id", "user", "kind", "title", "course", "lesson", "read_at", "created_at")
+    list_filter = ("kind", "read_at", "created_at")
+    search_fields = ("user__email", "user__username", "title", "body")
+    ordering = ("-created_at", "-id")
 
 
 class ReadOnlyAdmin(admin.ModelAdmin):

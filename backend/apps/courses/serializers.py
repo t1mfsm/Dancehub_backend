@@ -1,6 +1,7 @@
 import json
 from datetime import timedelta
 
+from django.utils import timezone
 from rest_framework import serializers
 
 from apps.common.choices import AttendanceStatus, CourseStatus, DanceLevel, EnrollmentStatus, LessonStatus, WeekdayCode
@@ -9,7 +10,10 @@ from apps.common.utils import (
     absolutize_media_url,
     build_full_name,
     course_lifecycle_status,
+    first_lesson_start_at,
+    has_hours_before,
     lesson_lifecycle_status,
+    lesson_start_at,
     lesson_start_iso,
 )
 from apps.courses.models import Course, Lesson
@@ -30,6 +34,7 @@ def serialize_course_list_item(course: Course, request=None, spots_left: int = 0
         course.teacher.user.first_name,
         course.teacher.user.middle_name,
     ) or course.teacher.user.email
+    first_lesson_at = first_lesson_start_at(course.lessons.all())
     return {
         "id": course.id,
         "name": course.name,
@@ -46,6 +51,10 @@ def serialize_course_list_item(course: Course, request=None, spots_left: int = 0
         "studio": course.studio.name,
         "schedule": [serialize_schedule_row(row) for row in course.schedule_rows.all().order_by("weekday", "time_from")],
         "spots_left": max(spots_left, 0),
+        "can_enroll": has_hours_before(first_lesson_at, hours=24),
+        "can_cancel_enrollment": has_hours_before(first_lesson_at, hours=24),
+        "can_edit": has_hours_before(first_lesson_at, hours=48),
+        "first_lesson_at": first_lesson_at.isoformat() if first_lesson_at else None,
     }
 
 
@@ -55,6 +64,7 @@ def serialize_course_detail(course: Course, request=None, spots_left: int = 0) -
         course.teacher.user.first_name,
         course.teacher.user.middle_name,
     ) or course.teacher.user.email
+    first_lesson_at = first_lesson_start_at(course.lessons.all())
     return {
         "id": course.id,
         "name": course.name,
@@ -78,10 +88,15 @@ def serialize_course_detail(course: Course, request=None, spots_left: int = 0) -
             "track": course.music_track or "",
             "url": course.music_url or "",
         },
+        "can_enroll": has_hours_before(first_lesson_at, hours=24),
+        "can_cancel_enrollment": has_hours_before(first_lesson_at, hours=24),
+        "can_edit": has_hours_before(first_lesson_at, hours=48),
+        "first_lesson_at": first_lesson_at.isoformat() if first_lesson_at else None,
     }
 
 
 def serialize_lesson(lesson: Lesson) -> dict:
+    starts_at = lesson_start_at(lesson.lesson_date, lesson.time_from)
     return {
         "id": lesson.id,
         "course_id": lesson.course_id,
@@ -91,6 +106,8 @@ def serialize_lesson(lesson: Lesson) -> dict:
         "location_text": lesson.location_text,
         "status": lesson_lifecycle_status(lesson.status, lesson.lesson_date),
         "hall": lesson.hall,
+        "start_at": starts_at.isoformat(),
+        "can_mark_attendance": timezone.now() >= starts_at,
     }
 
 
@@ -135,7 +152,22 @@ class CourseWriteSerializer(serializers.Serializer):
     def validate_schedule(self, value):
         serializer = ScheduleEntrySerializer(data=value, many=True)
         serializer.is_valid(raise_exception=True)
-        return serializer.validated_data
+        validated_rows = serializer.validated_data
+        unique_rows: list[dict] = []
+        seen_slots: set[tuple[str, str, str]] = set()
+
+        for row in validated_rows:
+            slot_key = (
+                row["weekday"],
+                row["time_from"].isoformat(timespec="minutes"),
+                row["time_to"].isoformat(timespec="minutes"),
+            )
+            if slot_key in seen_slots:
+                continue
+            seen_slots.add(slot_key)
+            unique_rows.append(row)
+
+        return unique_rows
 
     def validate(self, attrs):
         date_from = attrs.get("date_from")

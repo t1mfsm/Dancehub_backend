@@ -2,6 +2,7 @@ from django.contrib.auth.hashers import check_password
 from django.db import connection
 from django.db import transaction
 from django.db.models import Avg, Count, Q
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework import permissions, status
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -10,15 +11,22 @@ from rest_framework.views import APIView
 
 from apps.common.choices import CourseStatus, DanceLevel, EnrollmentStatus, UserRole
 from apps.common.files import save_uploaded_file
-from apps.common.utils import build_full_name, course_lifecycle_status
+from apps.common.utils import build_full_name, course_lifecycle_status, first_lesson_start_at, has_hours_before
 from apps.courses.models import Course, DanceStyle, Enrollment, FavoriteCourse
 from apps.courses.serializers import serialize_course_detail
 from apps.courses.serializers import EnrollmentRequestSerializer
-from apps.users.models import TeacherProfile, User
+from apps.users.models import Notification, TeacherProfile, User
 from config.authentication import build_tokens_for_user, decode_token
 
+from .notifications import (
+    create_student_enrollment_notification,
+    create_student_unenrollment_notification,
+    create_teacher_enrollment_notification,
+    create_teacher_unenrollment_notification,
+)
 from .serializers import (
     LoginSerializer,
+    NotificationReadSerializer,
     LogoutSerializer,
     RefreshSerializer,
     RegisterSerializer,
@@ -27,6 +35,7 @@ from .serializers import (
     UserPreferencesSerializer,
     UserSkillItemSerializer,
     UserUpdateSerializer,
+    serialize_notification,
     serialize_user,
     update_user_preferences_record,
 )
@@ -161,7 +170,7 @@ class MeAPIView(APIView):
 
             city_name = (data.get("city") or "").strip()
             user.city = City.objects.filter(name=city_name).first() if city_name else None
-        for field in ["username", "first_name", "middle_name", "last_name", "phone", "survey_completed", "dance_level", "role"]:
+        for field in ["username", "first_name", "middle_name", "last_name", "survey_completed", "dance_level", "role"]:
             if field in data:
                 setattr(user, field, data[field])
         if "avatar_file" in data:
@@ -172,7 +181,6 @@ class MeAPIView(APIView):
                 "first_name",
                 "middle_name",
                 "last_name",
-                "phone",
                 "survey_completed",
                 "avatar",
                 "city",
@@ -517,6 +525,54 @@ class MyCourseListAPIView(EnrollmentListAPIView):
     pass
 
 
+class NotificationListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = require_authenticated_user(request)
+        notifications = Notification.objects.filter(user=user).order_by("-created_at", "-id")
+        return Response([serialize_notification(notification) for notification in notifications])
+
+
+class NotificationReadAllAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=None)
+    def post(self, request):
+        user = require_authenticated_user(request)
+        marked = Notification.objects.filter(user=user, read_at__isnull=True).update(read_at=timezone.now())
+        return Response({"marked": marked})
+
+
+class NotificationDetailAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=NotificationReadSerializer)
+    def patch(self, request, id: int):
+        user = require_authenticated_user(request)
+        notification = Notification.objects.filter(id=id, user=user).first()
+        if notification is None:
+            raise ValidationError({"detail": "Notification not found."})
+
+        serializer = NotificationReadSerializer(data=request.data or {})
+        serializer.is_valid(raise_exception=True)
+
+        if serializer.validated_data["read"] and notification.read_at is None:
+            notification.read_at = timezone.now()
+            notification.save(update_fields=["read_at"])
+
+        return Response(serialize_notification(notification))
+
+    def delete(self, request, id: int):
+        user = require_authenticated_user(request)
+        notification = Notification.objects.filter(id=id, user=user).first()
+        if notification is None:
+            raise ValidationError({"detail": "Notification not found."})
+
+        notification.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class CourseEnrollAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -533,6 +589,9 @@ class CourseEnrollAPIView(APIView):
         lifecycle_status = course_lifecycle_status(course.status, course.date_from, course.date_to)
         if lifecycle_status != CourseStatus.PUBLISHED:
             raise ValidationError({"detail": "Enrollment is allowed only for published courses."})
+        first_lesson_at = first_lesson_start_at(course.lessons.all())
+        if not has_hours_before(first_lesson_at, hours=24):
+            raise ValidationError({"detail": "Enrollment closes 24 hours before the first lesson."})
         if course.teacher.user_id == user.id:
             raise ValidationError({"detail": "Teacher cannot enroll in own course."})
         enrollment = Enrollment.objects.filter(user=user, course=course).first()
@@ -549,6 +608,10 @@ class CourseEnrollAPIView(APIView):
             enrollment.status = EnrollmentStatus.ACTIVE
             enrollment.paid = serializer.validated_data["paid"]
             enrollment.save(update_fields=["status", "paid"])
+
+        course = Course.objects.select_related("teacher__user").filter(id=course.id).first() or course
+        create_teacher_enrollment_notification(course=course, student=user)
+        create_student_enrollment_notification(course=course, student=user)
         return Response(
             {
                 "id": enrollment.id,
@@ -563,7 +626,16 @@ class CourseEnrollAPIView(APIView):
     def delete(self, request, course_id: int):
         user = require_authenticated_user(request)
         enrollment = Enrollment.objects.filter(user=user, course_id=course_id).first()
-        if enrollment:
+        course = Course.objects.filter(id=course_id).first()
+        if course is not None:
+            first_lesson_at = first_lesson_start_at(course.lessons.all())
+            if not has_hours_before(first_lesson_at, hours=24):
+                raise ValidationError({"detail": "Enrollment cancellation closes 24 hours before the first lesson."})
+        if enrollment and enrollment.status != EnrollmentStatus.CANCELLED:
             enrollment.status = EnrollmentStatus.CANCELLED
             enrollment.save(update_fields=["status"])
+            course = Course.objects.select_related("teacher__user").filter(id=enrollment.course_id).first()
+            if course is not None:
+                create_teacher_unenrollment_notification(course=course, student=user)
+                create_student_unenrollment_notification(course=course, student=user)
         return Response(status=status.HTTP_204_NO_CONTENT)

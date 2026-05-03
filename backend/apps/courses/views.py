@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from django.db import transaction
-from django.db.models import Avg, Count, Q
+from django.db.models import Count, Q
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework import permissions, status
@@ -11,9 +11,23 @@ from rest_framework.views import APIView
 
 from apps.common.choices import AttendanceStatus, EnrollmentStatus, LessonStatus
 from apps.common.files import save_uploaded_file
-from apps.common.utils import build_full_name, course_lifecycle_status, lesson_lifecycle_status, lesson_start_iso
+from apps.common.utils import (
+    absolutize_media_url,
+    build_full_name,
+    course_lifecycle_status,
+    first_lesson_start_at,
+    has_hours_before,
+    lesson_lifecycle_status,
+    lesson_start_at,
+    lesson_start_iso,
+)
 from apps.courses.models import AttendanceMark, Course, CourseSchedule, DanceStyle, Enrollment, Lesson, Studio
 from apps.users.models import TeacherProfile, User
+from apps.users.notifications import (
+    create_course_updated_notifications,
+    create_favorite_teacher_new_course_notifications,
+    create_lesson_changed_notifications,
+)
 
 from .serializers import (
     AttendanceMarkRequestSerializer,
@@ -25,6 +39,7 @@ from .serializers import (
     serialize_course_list_item,
     serialize_lesson,
 )
+from .stats_service import build_course_attendance_stats
 
 
 class IsAuthenticated(permissions.BasePermission):
@@ -51,13 +66,22 @@ def get_course_or_404(course_id: int) -> Course:
     course = (
         Course.objects.filter(id=course_id)
         .select_related("teacher__user", "dance_style", "studio__city")
-        .prefetch_related("schedule_rows")
+        .prefetch_related("schedule_rows", "lessons")
         .annotate(active_enrollments=Count("enrollments", filter=Q(enrollments__status=EnrollmentStatus.ACTIVE)))
         .first()
     )
     if course is None:
         raise ValidationError({"detail": "Course not found."})
     return course
+
+
+def parse_query_date(value: str | None, field_name: str) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValidationError({field_name: "Invalid date format. Use YYYY-MM-DD."}) from exc
 
 
 def ensure_teacher_owns_course(teacher: TeacherProfile, course: Course) -> None:
@@ -306,6 +330,7 @@ class CourseListAPIView(APIView):
                         status=LessonStatus.SCHEDULED,
                     )
         course = get_course_or_404(course.id)
+        create_favorite_teacher_new_course_notifications(course=course)
         return Response(serialize_course_detail(course, request=request, spots_left=course.capacity - course.active_enrollments), status=status.HTTP_201_CREATED)
 
 
@@ -319,10 +344,29 @@ class CourseRetrieveAPIView(APIView):
         teacher = get_owned_teacher(request)
         course = get_course_or_404(id)
         ensure_teacher_owns_course(teacher, course)
+        first_lesson_at = first_lesson_start_at(course.lessons.all())
+        if not has_hours_before(first_lesson_at, hours=48):
+            raise ValidationError({"detail": "Course editing closes 48 hours before the first lesson."})
         serializer = CourseWriteSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         regenerate_schedule = any(field in data for field in ["date_from", "date_to", "schedule"])
+        should_notify_students = regenerate_schedule or any(
+            field in data
+            for field in [
+                "dance_style_id",
+                "studio_id",
+                "name",
+                "description",
+                "music_artist",
+                "music_track",
+                "music_url",
+                "level",
+                "price",
+                "capacity",
+                "status",
+            ]
+        )
         with transaction.atomic():
             for field in [
                 "dance_style_id",
@@ -388,6 +432,8 @@ class CourseRetrieveAPIView(APIView):
                             status=LessonStatus.SCHEDULED,
                         )
         course = get_course_or_404(course.id)
+        if should_notify_students:
+            create_course_updated_notifications(course=course, actor=teacher.user)
         return Response(serialize_course_detail(course, request=request, spots_left=course.capacity - course.active_enrollments))
 
     def delete(self, request, id: int):
@@ -406,7 +452,7 @@ class CourseStudentListAPIView(APIView):
         course = get_course_or_404(id)
         ensure_teacher_owns_course(teacher, course)
         enrollments = (
-            Enrollment.objects.filter(course=course)
+            Enrollment.objects.filter(course=course, status=EnrollmentStatus.ACTIVE)
             .select_related("user")
             .order_by("-enrolled_at")
         )
@@ -417,7 +463,7 @@ class CourseStudentListAPIView(APIView):
                     "user_id": enrollment.user_id,
                     "full_name": enrollment.user.get_full_name() or enrollment.user.email,
                     "email": enrollment.user.email,
-                    "phone": enrollment.user.phone or "",
+                    "avatar": absolutize_media_url(request, enrollment.user.avatar) or "",
                     "dance_level": enrollment.user.dance_level or "",
                     "enrolled_at": enrollment.enrolled_at.isoformat(),
                     "status": enrollment.status,
@@ -473,64 +519,9 @@ class CourseAttendanceStatsAPIView(APIView):
         teacher = get_owned_teacher(request)
         course = get_course_or_404(id)
         ensure_teacher_owns_course(teacher, course)
-        lessons = Lesson.objects.filter(course=course).order_by("lesson_date", "time_from")
-        if date_from := request.query_params.get("date_from"):
-            lessons = lessons.filter(lesson_date__gte=date_from)
-        if date_to := request.query_params.get("date_to"):
-            lessons = lessons.filter(lesson_date__lte=date_to)
-        lesson_ids = list(lessons.values_list("id", flat=True))
-        marks = AttendanceMark.objects.filter(lesson_id__in=lesson_ids).select_related("student", "lesson")
-        students = (
-            User.objects.filter(enrollments__course=course)
-            .distinct()
-            .order_by("last_name", "first_name")
-        )
-        per_lesson = []
-        attendance_percentages = []
-        for lesson in lessons:
-            present = marks.filter(lesson=lesson, status=AttendanceStatus.PRESENT).count()
-            absent = marks.filter(lesson=lesson, status=AttendanceStatus.ABSENT).count()
-            total = present + absent
-            percent = round((present / total) * 100, 2) if total else 0
-            attendance_percentages.append(percent)
-            per_lesson.append(
-                {
-                    "lesson_id": lesson.id,
-                    "date": lesson.lesson_date.isoformat(),
-                    "present": present,
-                    "absent": absent,
-                    "total": total,
-                    "percent": percent,
-                }
-            )
-        per_student = []
-        for student in students:
-            student_marks = marks.filter(student=student)
-            attended = student_marks.filter(status=AttendanceStatus.PRESENT).count()
-            missed = student_marks.filter(status=AttendanceStatus.ABSENT).count()
-            total = attended + missed
-            percent = round((attended / total) * 100, 2) if total else 0
-            per_student.append(
-                {
-                    "student_id": student.id,
-                    "student_name": student.get_full_name() or student.email,
-                    "attended": attended,
-                    "missed": missed,
-                    "total": total,
-                    "percent": percent,
-                }
-            )
-        return Response(
-            {
-                "total_lessons": lessons.count(),
-                "conducted_lessons": lessons.exclude(status=LessonStatus.CANCELLED).filter(lesson_date__lt=datetime.now().date()).count(),
-                "cancelled_lessons": lessons.filter(status=LessonStatus.CANCELLED).count(),
-                "avg_attendance_percent": round(sum(attendance_percentages) / len(attendance_percentages), 2) if attendance_percentages else 0,
-                "total_students": students.count(),
-                "per_lesson": per_lesson,
-                "per_student": per_student,
-            }
-        )
+        date_from = parse_query_date(request.query_params.get("date_from"), "date_from")
+        date_to = parse_query_date(request.query_params.get("date_to"), "date_to")
+        return Response(build_course_attendance_stats(course=course, date_from=date_from, date_to=date_to))
 
 
 class LessonCancelAPIView(APIView):
@@ -545,6 +536,12 @@ class LessonCancelAPIView(APIView):
         ensure_teacher_owns_course(teacher, lesson.course)
         lesson.status = LessonStatus.CANCELLED
         lesson.save(update_fields=["status"])
+        create_lesson_changed_notifications(
+            lesson=lesson,
+            actor=teacher.user,
+            title="Занятие отменено",
+            body=f"Занятие курса «{lesson.course.name}» было отменено.",
+        )
         return Response(serialize_lesson(lesson))
 
 
@@ -558,6 +555,8 @@ class AttendanceMarkAPIView(APIView):
         if lesson is None:
             raise ValidationError({"detail": "Lesson not found."})
         ensure_teacher_owns_course(teacher, lesson.course)
+        if timezone.now() < lesson_start_at(lesson.lesson_date, lesson.time_from):
+            raise ValidationError({"detail": "Attendance can be marked only after the lesson starts."})
         serializer = AttendanceMarkRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         mark, _ = AttendanceMark.objects.update_or_create(
@@ -620,7 +619,18 @@ class LessonRetrieveUpdateDestroyAPIView(APIView):
         ensure_teacher_owns_course(teacher, lesson.course)
         serializer = LessonUpdateSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+        should_notify_students = any(
+            field in serializer.validated_data
+            for field in ["lesson_date", "time_from", "time_to", "location_text", "hall", "status"]
+        )
         for field, value in serializer.validated_data.items():
             setattr(lesson, field, value)
         lesson.save()
+        if should_notify_students:
+            create_lesson_changed_notifications(
+                lesson=lesson,
+                actor=teacher.user,
+                title="Занятие изменено",
+                body=f"Детали занятия курса «{lesson.course.name}» были изменены. Проверьте актуальное расписание.",
+            )
         return Response(serialize_lesson(lesson))

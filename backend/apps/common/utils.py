@@ -1,6 +1,7 @@
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 
 from django.http import HttpRequest
+from django.utils import timezone
 
 from .choices import CourseStatus, LessonStatus
 
@@ -31,6 +32,27 @@ def lesson_lifecycle_status(lesson_status: str, lesson_date: date) -> str:
 
 def lesson_start_iso(lesson_date: date, lesson_time: time) -> str:
     return datetime.combine(lesson_date, lesson_time).isoformat()
+
+
+def lesson_start_at(lesson_date: date, lesson_time: time) -> datetime:
+    naive = datetime.combine(lesson_date, lesson_time)
+    current_tz = timezone.get_current_timezone()
+    if timezone.is_naive(naive):
+        return timezone.make_aware(naive, current_tz)
+    return naive.astimezone(current_tz)
+
+
+def first_lesson_start_at(lessons) -> datetime | None:
+    first_lesson = lessons.exclude(status=LessonStatus.CANCELLED).order_by("lesson_date", "time_from").first()
+    if first_lesson is None:
+        return None
+    return lesson_start_at(first_lesson.lesson_date, first_lesson.time_from)
+
+
+def has_hours_before(moment: datetime | None, hours: int) -> bool:
+    if moment is None:
+        return True
+    return timezone.now() <= moment - timedelta(hours=hours)
 
 
 def absolutize_media_url(request: HttpRequest | None, value: str | None) -> str:
