@@ -22,6 +22,11 @@ from apps.common.utils import (
     lesson_start_iso,
 )
 from apps.courses.models import AttendanceMark, Course, CourseSchedule, DanceStyle, Enrollment, Lesson, Studio
+from apps.courses.payment_utils import (
+    build_spots_left_map,
+    expire_stale_payment_orders_for_enrollment,
+    get_live_pending_payment_order,
+)
 from apps.users.models import TeacherProfile, User
 from apps.users.notifications import (
     create_course_updated_notifications,
@@ -87,6 +92,42 @@ def parse_query_date(value: str | None, field_name: str) -> date | None:
 def ensure_teacher_owns_course(teacher: TeacherProfile, course: Course) -> None:
     if course.teacher_id != teacher.id:
         raise PermissionDenied("You can manage only your own courses.")
+
+
+def build_course_viewer_context(course: Course, user: User | None) -> dict:
+    if user is None or not getattr(user, "is_authenticated", False):
+        return {
+            "viewer_enrollment_status": None,
+            "viewer_paid": False,
+            "viewer_payment_order": None,
+        }
+
+    enrollment = Enrollment.objects.filter(user=user, course=course).first()
+    if enrollment is None:
+        return {
+            "viewer_enrollment_status": None,
+            "viewer_paid": False,
+            "viewer_payment_order": None,
+        }
+
+    expire_stale_payment_orders_for_enrollment(enrollment)
+    enrollment.refresh_from_db()
+    payment_order = get_live_pending_payment_order(enrollment)
+
+    if enrollment.status == EnrollmentStatus.CANCELLED and payment_order is None:
+        return {
+            "viewer_enrollment_status": None,
+            "viewer_paid": False,
+            "viewer_payment_order": None,
+        }
+
+    from .serializers import serialize_payment_order
+
+    return {
+        "viewer_enrollment_status": enrollment.status,
+        "viewer_paid": enrollment.paid,
+        "viewer_payment_order": serialize_payment_order(payment_order) if payment_order is not None else None,
+    }
 
 
 class DanceStyleListAPIView(APIView):
@@ -261,6 +302,7 @@ class CourseListAPIView(APIView):
                 | Q(teacher__user__email__icontains=teacher)
             )
         courses = list(courses.distinct().order_by("-id"))
+        spots_left_map = build_spots_left_map(courses)
         if status_filter:
             courses = [
                 course
@@ -269,7 +311,7 @@ class CourseListAPIView(APIView):
             ]
         return Response(
             [
-                serialize_course_list_item(course, request=request, spots_left=course.capacity - course.active_enrollments)
+                serialize_course_list_item(course, request=request, spots_left=spots_left_map.get(course.id, course.capacity))
                 for course in courses
             ]
         )
@@ -330,14 +372,24 @@ class CourseListAPIView(APIView):
                         status=LessonStatus.SCHEDULED,
                     )
         course = get_course_or_404(course.id)
+        spots_left = build_spots_left_map([course]).get(course.id, course.capacity)
         create_favorite_teacher_new_course_notifications(course=course)
-        return Response(serialize_course_detail(course, request=request, spots_left=course.capacity - course.active_enrollments), status=status.HTTP_201_CREATED)
+        return Response(serialize_course_detail(course, request=request, spots_left=spots_left), status=status.HTTP_201_CREATED)
 
 
 class CourseRetrieveAPIView(APIView):
     def get(self, request, id: int):
         course = get_course_or_404(id)
-        return Response(serialize_course_detail(course, request=request, spots_left=course.capacity - course.active_enrollments))
+        spots_left = build_spots_left_map([course]).get(course.id, course.capacity)
+        viewer_context = build_course_viewer_context(course, getattr(request, "user", None))
+        return Response(
+            serialize_course_detail(
+                course,
+                request=request,
+                spots_left=spots_left,
+                viewer_context=viewer_context,
+            )
+        )
 
     @extend_schema(request=CourseWriteSerializer)
     def patch(self, request, id: int):
@@ -432,9 +484,10 @@ class CourseRetrieveAPIView(APIView):
                             status=LessonStatus.SCHEDULED,
                         )
         course = get_course_or_404(course.id)
+        spots_left = build_spots_left_map([course]).get(course.id, course.capacity)
         if should_notify_students:
             create_course_updated_notifications(course=course, actor=teacher.user)
-        return Response(serialize_course_detail(course, request=request, spots_left=course.capacity - course.active_enrollments))
+        return Response(serialize_course_detail(course, request=request, spots_left=spots_left))
 
     def delete(self, request, id: int):
         teacher = get_owned_teacher(request)

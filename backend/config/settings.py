@@ -95,6 +95,8 @@ if not FRONTEND_ASSETS_ROOT.exists():
     FRONTEND_ASSETS_ROOT = BASE_DIR.parent.parent / "f2e-front" / "src" / "assets"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+EMAIL_BACKEND = config("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
+DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="no-reply@dancehub.local")
 
 USE_S3 = env_bool("USE_S3", default=False)
 if USE_S3:

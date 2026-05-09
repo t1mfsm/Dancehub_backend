@@ -9,12 +9,28 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.common.choices import CourseStatus, DanceLevel, EnrollmentStatus, UserRole
+from apps.common.choices import CourseStatus, DanceLevel, EnrollmentStatus, PaymentMethod, PaymentOrderStatus, UserRole
 from apps.common.files import save_uploaded_file
 from apps.common.utils import build_full_name, course_lifecycle_status, first_lesson_start_at, has_hours_before
-from apps.courses.models import Course, DanceStyle, Enrollment, FavoriteCourse
-from apps.courses.serializers import serialize_course_detail
-from apps.courses.serializers import EnrollmentRequestSerializer
+from apps.courses.models import Course, DanceStyle, Enrollment, FavoriteCourse, PaymentOrder
+from apps.courses.payment_receipts import send_payment_receipt_email
+from apps.courses.payment_utils import (
+    PAYMENT_ORDER_TTL,
+    build_spots_left_map,
+    cancel_pending_payment_orders,
+    expire_payment_order_if_needed,
+    expire_stale_payment_orders_for_enrollment,
+    generate_payment_order_number,
+    generate_payment_public_token,
+    get_live_pending_payment_order,
+)
+from apps.courses.serializers import (
+    EnrollmentRequestSerializer,
+    PaymentCardPaySerializer,
+    PaymentSbpPaySerializer,
+    serialize_course_detail,
+    serialize_payment_order,
+)
 from apps.users.models import Notification, TeacherProfile, User
 from config.authentication import build_tokens_for_user, decode_token
 
@@ -67,6 +83,49 @@ def user_with_rating(user: User):
     if teacher:
         rating = teacher.reviews.aggregate(value=Avg("rating"))["value"] or 0
     return teacher, rating
+
+
+def _build_course_viewer_context(course: Course, user: User | None) -> dict:
+    if user is None or not getattr(user, "is_authenticated", False):
+        return {
+            "viewer_enrollment_status": None,
+            "viewer_paid": False,
+            "viewer_payment_order": None,
+        }
+
+    enrollment = Enrollment.objects.filter(user=user, course=course).first()
+    if enrollment is None:
+        return {
+            "viewer_enrollment_status": None,
+            "viewer_paid": False,
+            "viewer_payment_order": None,
+        }
+
+    expire_stale_payment_orders_for_enrollment(enrollment)
+    enrollment.refresh_from_db()
+
+    live_order = get_live_pending_payment_order(enrollment)
+    if enrollment.status == EnrollmentStatus.CANCELLED and live_order is None:
+        return {
+            "viewer_enrollment_status": None,
+            "viewer_paid": False,
+            "viewer_payment_order": None,
+        }
+
+    return {
+        "viewer_enrollment_status": enrollment.status,
+        "viewer_paid": enrollment.paid,
+        "viewer_payment_order": serialize_payment_order(live_order) if live_order is not None else None,
+    }
+
+
+def _serialize_payment_order_response(order: PaymentOrder) -> dict:
+    order = expire_payment_order_if_needed(order)
+    return {
+        "payment_order": serialize_payment_order(order),
+        "enrollment_status": order.enrollment.status,
+        "paid": order.enrollment.paid,
+    }
 
 
 def apply_user_preferences(user: User, data: dict, *, mark_survey_completed: bool = False) -> User:
@@ -402,16 +461,17 @@ class MyTeachingCourseListAPIView(APIView):
 
     def get(self, request):
         teacher = get_current_teacher(request)
-        courses = (
+        courses = list(
             Course.objects.filter(teacher=teacher)
             .select_related("teacher__user", "dance_style", "studio__city")
             .prefetch_related("schedule_rows")
             .annotate(active_enrollments=Count("enrollments", filter=Q(enrollments__status=EnrollmentStatus.ACTIVE)))
             .order_by("-id")
         )
+        spots_left_map = build_spots_left_map(courses)
         return Response(
             [
-                serialize_course_detail(course, request=request, spots_left=course.capacity - course.active_enrollments)
+                serialize_course_detail(course, request=request, spots_left=spots_left_map.get(course.id, course.capacity))
                 for course in courses
             ]
         )
@@ -505,7 +565,7 @@ class EnrollmentListAPIView(APIView):
 
     def get(self, request):
         user = require_authenticated_user(request)
-        courses = (
+        courses = list(
             Course.objects.filter(enrollments__user=user, enrollments__status=EnrollmentStatus.ACTIVE)
             .select_related("teacher__user", "dance_style", "studio__city")
             .prefetch_related("schedule_rows")
@@ -513,9 +573,10 @@ class EnrollmentListAPIView(APIView):
             .distinct()
             .order_by("-id")
         )
+        spots_left_map = build_spots_left_map(courses)
         return Response(
             [
-                serialize_course_detail(course, request=request, spots_left=course.capacity - course.active_enrollments)
+                serialize_course_detail(course, request=request, spots_left=spots_left_map.get(course.id, course.capacity))
                 for course in courses
             ]
         )
@@ -581,47 +642,69 @@ class CourseEnrollAPIView(APIView):
         user = require_authenticated_user(request)
         serializer = EnrollmentRequestSerializer(data=request.data or {})
         serializer.is_valid(raise_exception=True)
-        course = Course.objects.filter(id=course_id).annotate(
-            active_enrollments=Count("enrollments", filter=Q(enrollments__status=EnrollmentStatus.ACTIVE))
-        ).first()
-        if course is None:
-            raise ValidationError({"detail": "Course not found."})
-        lifecycle_status = course_lifecycle_status(course.status, course.date_from, course.date_to)
-        if lifecycle_status != CourseStatus.PUBLISHED:
-            raise ValidationError({"detail": "Enrollment is allowed only for published courses."})
-        first_lesson_at = first_lesson_start_at(course.lessons.all())
-        if not has_hours_before(first_lesson_at, hours=24):
-            raise ValidationError({"detail": "Enrollment closes 24 hours before the first lesson."})
-        if course.teacher.user_id == user.id:
-            raise ValidationError({"detail": "Teacher cannot enroll in own course."})
-        enrollment = Enrollment.objects.filter(user=user, course=course).first()
-        if enrollment is None:
-            if course.active_enrollments >= course.capacity:
-                raise ValidationError({"detail": "No spots left."})
-            enrollment = Enrollment.objects.create(
-                user=user,
-                course=course,
-                status=EnrollmentStatus.ACTIVE,
-                paid=serializer.validated_data["paid"],
+        with transaction.atomic():
+            course = (
+                Course.objects.select_related("teacher__user")
+                .prefetch_related("lessons")
+                .annotate(active_enrollments=Count("enrollments", filter=Q(enrollments__status=EnrollmentStatus.ACTIVE)))
+                .filter(id=course_id)
+                .first()
             )
-        else:
-            enrollment.status = EnrollmentStatus.ACTIVE
-            enrollment.paid = serializer.validated_data["paid"]
-            enrollment.save(update_fields=["status", "paid"])
+            if course is None:
+                raise ValidationError({"detail": "Course not found."})
 
-        course = Course.objects.select_related("teacher__user").filter(id=course.id).first() or course
-        create_teacher_enrollment_notification(course=course, student=user)
-        create_student_enrollment_notification(course=course, student=user)
-        return Response(
-            {
-                "id": enrollment.id,
-                "user_id": enrollment.user_id,
-                "course_id": enrollment.course_id,
-                "status": enrollment.status,
-                "enrolled_at": enrollment.enrolled_at.isoformat(),
-                "paid": enrollment.paid,
-            }
-        )
+            lifecycle_status = course_lifecycle_status(course.status, course.date_from, course.date_to)
+            if lifecycle_status != CourseStatus.PUBLISHED:
+                raise ValidationError({"detail": "Enrollment is allowed only for published courses."})
+
+            first_lesson_at = first_lesson_start_at(course.lessons.all())
+            if not has_hours_before(first_lesson_at, hours=24):
+                raise ValidationError({"detail": "Enrollment closes 24 hours before the first lesson."})
+
+            if course.teacher.user_id == user.id:
+                raise ValidationError({"detail": "Teacher cannot enroll in own course."})
+
+            enrollment = Enrollment.objects.filter(user=user, course=course).first()
+            if enrollment is not None:
+                expire_stale_payment_orders_for_enrollment(enrollment)
+                enrollment.refresh_from_db()
+
+                if enrollment.status == EnrollmentStatus.ACTIVE and enrollment.paid:
+                    raise ValidationError({"detail": "User already paid for this course."})
+
+                live_order = get_live_pending_payment_order(enrollment)
+                if live_order is not None:
+                    return Response(_serialize_payment_order_response(live_order))
+
+            spots_left = build_spots_left_map([course]).get(course.id, course.capacity)
+            if spots_left <= 0:
+                raise ValidationError({"detail": "No spots left."})
+
+            if enrollment is None:
+                enrollment = Enrollment.objects.create(
+                    user=user,
+                    course=course,
+                    status=EnrollmentStatus.PENDING,
+                    paid=False,
+                )
+            else:
+                enrollment.status = EnrollmentStatus.PENDING
+                enrollment.paid = False
+                enrollment.enrolled_at = timezone.now()
+                enrollment.save(update_fields=["status", "paid", "enrolled_at"])
+
+            order = PaymentOrder.objects.create(
+                enrollment=enrollment,
+                order_number=generate_payment_order_number(),
+                public_token=generate_payment_public_token(),
+                amount=course.price,
+                status=PaymentOrderStatus.PENDING,
+                expires_at=timezone.now() + PAYMENT_ORDER_TTL,
+                created_at=timezone.now(),
+                updated_at=timezone.now(),
+            )
+
+        return Response(_serialize_payment_order_response(order), status=status.HTTP_201_CREATED)
 
     def delete(self, request, course_id: int):
         user = require_authenticated_user(request)
@@ -632,10 +715,120 @@ class CourseEnrollAPIView(APIView):
             if not has_hours_before(first_lesson_at, hours=24):
                 raise ValidationError({"detail": "Enrollment cancellation closes 24 hours before the first lesson."})
         if enrollment and enrollment.status != EnrollmentStatus.CANCELLED:
+            was_active_paid = enrollment.status == EnrollmentStatus.ACTIVE and enrollment.paid
+            cancel_pending_payment_orders(enrollment)
             enrollment.status = EnrollmentStatus.CANCELLED
             enrollment.save(update_fields=["status"])
             course = Course.objects.select_related("teacher__user").filter(id=enrollment.course_id).first()
-            if course is not None:
+            if was_active_paid and course is not None:
                 create_teacher_unenrollment_notification(course=course, student=user)
                 create_student_unenrollment_notification(course=course, student=user)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PaymentOrderDetailAPIView(APIView):
+    authentication_classes = []
+
+    def get(self, _request, token: str):
+        order = (
+            PaymentOrder.objects.select_related("enrollment__course", "enrollment__user")
+            .filter(public_token=token)
+            .first()
+        )
+        if order is None:
+            raise ValidationError({"detail": "Payment order not found."})
+
+        order = expire_payment_order_if_needed(order)
+        return Response(_serialize_payment_order_response(order))
+
+
+class PaymentOrderPayCardAPIView(APIView):
+    authentication_classes = []
+
+    @extend_schema(request=PaymentCardPaySerializer)
+    def post(self, request, token: str):
+        serializer = PaymentCardPaySerializer(data=request.data or {})
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            order = (
+                PaymentOrder.objects.select_related("enrollment__course__teacher__user", "enrollment__user")
+                .filter(public_token=token)
+                .first()
+            )
+            if order is None:
+                raise ValidationError({"detail": "Payment order not found."})
+
+            order = expire_payment_order_if_needed(order)
+            if order.status == PaymentOrderStatus.EXPIRED:
+                raise ValidationError({"detail": "Payment order expired."})
+            if order.status == PaymentOrderStatus.CANCELLED:
+                raise ValidationError({"detail": "Payment order was cancelled."})
+            if order.status == PaymentOrderStatus.PAID:
+                return Response(_serialize_payment_order_response(order))
+
+            enrollment = order.enrollment
+            enrollment.status = EnrollmentStatus.ACTIVE
+            enrollment.paid = True
+            enrollment.save(update_fields=["status", "paid"])
+
+            order.receipt_email = serializer.validated_data["receipt_email"]
+            order.payment_method = PaymentMethod.CARD
+            order.status = PaymentOrderStatus.PAID
+            order.paid_at = timezone.now()
+            order.updated_at = timezone.now()
+            order.save(update_fields=["receipt_email", "payment_method", "status", "paid_at", "updated_at"])
+
+            course = order.enrollment.course
+            student = order.enrollment.user
+            create_teacher_enrollment_notification(course=course, student=student)
+            create_student_enrollment_notification(course=course, student=student)
+
+        send_payment_receipt_email(order)
+        return Response(_serialize_payment_order_response(order))
+
+
+class PaymentOrderPaySbpAPIView(APIView):
+    authentication_classes = []
+
+    @extend_schema(request=PaymentSbpPaySerializer)
+    def post(self, request, token: str):
+        serializer = PaymentSbpPaySerializer(data=request.data or {})
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            order = (
+                PaymentOrder.objects.select_related("enrollment__course__teacher__user", "enrollment__user")
+                .filter(public_token=token)
+                .first()
+            )
+            if order is None:
+                raise ValidationError({"detail": "Payment order not found."})
+
+            order = expire_payment_order_if_needed(order)
+            if order.status == PaymentOrderStatus.EXPIRED:
+                raise ValidationError({"detail": "Payment order expired."})
+            if order.status == PaymentOrderStatus.CANCELLED:
+                raise ValidationError({"detail": "Payment order was cancelled."})
+            if order.status == PaymentOrderStatus.PAID:
+                return Response(_serialize_payment_order_response(order))
+
+            enrollment = order.enrollment
+            enrollment.status = EnrollmentStatus.ACTIVE
+            enrollment.paid = True
+            enrollment.save(update_fields=["status", "paid"])
+
+            order.receipt_email = serializer.validated_data["receipt_email"]
+            order.payment_method = PaymentMethod.SBP
+            order.status = PaymentOrderStatus.PAID
+            order.paid_at = timezone.now()
+            order.updated_at = timezone.now()
+            order.save(update_fields=["receipt_email", "payment_method", "status", "paid_at", "updated_at"])
+
+            course = order.enrollment.course
+            student = order.enrollment.user
+            create_teacher_enrollment_notification(course=course, student=student)
+            create_student_enrollment_notification(course=course, student=student)
+
+        send_payment_receipt_email(order)
+        return Response(_serialize_payment_order_response(order))
