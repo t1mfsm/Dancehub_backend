@@ -7,12 +7,14 @@ from pathlib import Path
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 
+from apps.common.utils import normalize_media_reference
+
 
 def save_uploaded_file(uploaded_file, folder: str) -> str:
     suffix = Path(uploaded_file.name).suffix or ".bin"
     filename = f"{folder}/{uuid.uuid4().hex}{suffix}"
     saved_path = default_storage.save(filename, uploaded_file)
-    return default_storage.url(saved_path)
+    return normalize_media_reference(default_storage.url(saved_path))
 
 
 def save_data_url(data_url: str, folder: str) -> str:
@@ -26,7 +28,7 @@ def save_data_url(data_url: str, folder: str) -> str:
     except (ValueError, binascii.Error):
         return data_url
     saved_path = default_storage.save(filename, ContentFile(binary))
-    return default_storage.url(saved_path)
+    return normalize_media_reference(default_storage.url(saved_path))
 
 
 def persist_image_reference(value: str, folder: str) -> str:
@@ -34,5 +36,4 @@ def persist_image_reference(value: str, folder: str) -> str:
         return value
     if value.startswith("data:image/"):
         return save_data_url(value, folder)
-    return value
-
+    return normalize_media_reference(value)

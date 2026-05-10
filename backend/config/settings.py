@@ -96,6 +96,13 @@ if not FRONTEND_ASSETS_ROOT.exists():
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 EMAIL_BACKEND = config("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
+EMAIL_HOST = config("EMAIL_HOST", default="smtp.yandex.ru")
+EMAIL_PORT = config("EMAIL_PORT", default=587, cast=int)
+EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", default=True)
+EMAIL_USE_SSL = env_bool("EMAIL_USE_SSL", default=False)
+EMAIL_TIMEOUT = config("EMAIL_TIMEOUT", default=20, cast=int)
 DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="no-reply@dancehub.local")
 
 USE_S3 = env_bool("USE_S3", default=False)

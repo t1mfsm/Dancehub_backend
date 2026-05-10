@@ -6,6 +6,18 @@ from django.utils import timezone
 from .choices import CourseStatus, LessonStatus
 
 
+def normalize_media_reference(value: str | None) -> str:
+    if not value:
+        return ""
+    if value.startswith("data:"):
+        return value
+    for marker in ("/dancehub-media/", "/media/"):
+        marker_index = value.find(marker)
+        if marker_index >= 0:
+            return value[marker_index:]
+    return value
+
+
 def build_full_name(*parts: str) -> str:
     return " ".join(part.strip() for part in parts if part and part.strip())
 
@@ -56,10 +68,15 @@ def has_hours_before(moment: datetime | None, hours: int) -> bool:
 
 
 def absolutize_media_url(request: HttpRequest | None, value: str | None) -> str:
-    if not value:
+    normalized = normalize_media_reference(value)
+    if not normalized:
         return ""
-    if value.startswith("http://") or value.startswith("https://") or value.startswith("data:"):
-        return value
+    if normalized.startswith("data:"):
+        return normalized
+    if normalized.startswith("/dancehub-media/") or normalized.startswith("/media/"):
+        return normalized
+    if normalized.startswith("http://") or normalized.startswith("https://"):
+        return normalized
     if request is None:
-        return value
-    return request.build_absolute_uri(value)
+        return normalized
+    return request.build_absolute_uri(normalized)
