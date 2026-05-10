@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     "apps.locations",
     "apps.users",
     "apps.courses",
+    "apps.recommendations",
 ]
 
 MIDDLEWARE = [
@@ -163,6 +164,7 @@ MIGRATION_MODULES = {
     "users": None,
     "courses": None,
     "locations": None,
+    "recommendations": None,
 }
 
 import config.schema  # noqa: E402,F401

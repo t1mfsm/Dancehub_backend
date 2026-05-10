@@ -27,6 +27,7 @@ from apps.courses.payment_utils import (
     expire_stale_payment_orders_for_enrollment,
     get_live_pending_payment_order,
 )
+from apps.recommendations.services import refresh_recommendations_for_user, track_course_view
 from apps.users.models import TeacherProfile, User
 from apps.users.notifications import (
     create_course_updated_notifications,
@@ -303,6 +304,10 @@ class CourseListAPIView(APIView):
             )
         courses = list(courses.distinct().order_by("-id"))
         spots_left_map = build_spots_left_map(courses)
+        user = getattr(request, "user", None)
+        if user is not None and getattr(user, "is_authenticated", False):
+            for course in courses:
+                course._viewer_context = build_course_viewer_context(course, user)
         if status_filter:
             courses = [
                 course
@@ -380,8 +385,12 @@ class CourseListAPIView(APIView):
 class CourseRetrieveAPIView(APIView):
     def get(self, request, id: int):
         course = get_course_or_404(id)
+        user = getattr(request, "user", None)
+        if user is not None and getattr(user, "is_authenticated", False):
+            if track_course_view(user, course):
+                refresh_recommendations_for_user(user)
         spots_left = build_spots_left_map([course]).get(course.id, course.capacity)
-        viewer_context = build_course_viewer_context(course, getattr(request, "user", None))
+        viewer_context = build_course_viewer_context(course, user)
         return Response(
             serialize_course_detail(
                 course,
@@ -617,6 +626,8 @@ class AttendanceMarkAPIView(APIView):
             student_id=serializer.validated_data["student_id"],
             defaults={"status": serializer.validated_data["status"], "marked_at": timezone.now()},
         )
+        if mark.status == AttendanceStatus.PRESENT:
+            refresh_recommendations_for_user(mark.student)
         return Response(
             {
                 "id": mark.id,

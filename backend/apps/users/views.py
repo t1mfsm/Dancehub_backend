@@ -31,6 +31,7 @@ from apps.courses.serializers import (
     serialize_course_detail,
     serialize_payment_order,
 )
+from apps.recommendations.services import refresh_recommendations_for_user
 from apps.users.models import Notification, TeacherProfile, User
 from config.authentication import build_tokens_for_user, decode_token
 
@@ -260,6 +261,7 @@ class UserSurveyAPIView(APIView):
         serializer = UserPreferencesSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         user = apply_user_preferences(user, serializer.validated_data, mark_survey_completed=True)
+        refresh_recommendations_for_user(user)
         teacher, rating = user_with_rating(user)
         return Response(serialize_user(user, request=request, teacher=teacher, teacher_rating=rating))
 
@@ -273,6 +275,7 @@ class UserPreferenceAPIView(APIView):
         serializer = UserPreferencesSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         user = apply_user_preferences(user, serializer.validated_data)
+        refresh_recommendations_for_user(user)
         teacher, rating = user_with_rating(user)
         return Response(serialize_user(user, request=request, teacher=teacher, teacher_rating=rating))
 
@@ -528,12 +531,14 @@ class FavoriteCourseAddAPIView(APIView):
                 """,
                 [user.id, course_id],
             )
+        refresh_recommendations_for_user(user)
         return Response({"detail": "ok"})
 
     def delete(self, request, course_id: int):
         user = require_authenticated_user(request)
         with connection.cursor() as cursor:
             cursor.execute("DELETE FROM favorite_courses WHERE user_id = %s AND course_id = %s", [user.id, course_id])
+        refresh_recommendations_for_user(user)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -551,12 +556,14 @@ class FavoriteTeacherAddAPIView(APIView):
                 """,
                 [user.id, teacher_id],
             )
+        refresh_recommendations_for_user(user)
         return Response({"detail": "ok"})
 
     def delete(self, request, teacher_id: int):
         user = require_authenticated_user(request)
         with connection.cursor() as cursor:
             cursor.execute("DELETE FROM favorite_teachers WHERE user_id = %s AND teacher_id = %s", [user.id, teacher_id])
+        refresh_recommendations_for_user(user)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -704,6 +711,7 @@ class CourseEnrollAPIView(APIView):
                 updated_at=timezone.now(),
             )
 
+        refresh_recommendations_for_user(user)
         return Response(_serialize_payment_order_response(order), status=status.HTTP_201_CREATED)
 
     def delete(self, request, course_id: int):
@@ -723,6 +731,7 @@ class CourseEnrollAPIView(APIView):
             if was_active_paid and course is not None:
                 create_teacher_unenrollment_notification(course=course, student=user)
                 create_student_unenrollment_notification(course=course, student=user)
+            refresh_recommendations_for_user(user)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -784,6 +793,7 @@ class PaymentOrderPayCardAPIView(APIView):
             create_teacher_enrollment_notification(course=course, student=student)
             create_student_enrollment_notification(course=course, student=student)
 
+        refresh_recommendations_for_user(student)
         send_payment_receipt_email(order)
         return Response(_serialize_payment_order_response(order))
 
@@ -830,5 +840,6 @@ class PaymentOrderPaySbpAPIView(APIView):
             create_teacher_enrollment_notification(course=course, student=student)
             create_student_enrollment_notification(course=course, student=student)
 
+        refresh_recommendations_for_user(student)
         send_payment_receipt_email(order)
         return Response(_serialize_payment_order_response(order))

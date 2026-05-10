@@ -42,7 +42,7 @@ def serialize_course_list_item(course: Course, request=None, spots_left: int = 0
         course.teacher.user.middle_name,
     ) or course.teacher.user.email
     first_lesson_at = first_lesson_start_at(course.lessons.all())
-    return {
+    payload = {
         "id": course.id,
         "name": course.name,
         "level": course.level,
@@ -63,6 +63,10 @@ def serialize_course_list_item(course: Course, request=None, spots_left: int = 0
         "can_edit": has_hours_before(first_lesson_at, hours=48),
         "first_lesson_at": first_lesson_at.isoformat() if first_lesson_at else None,
     }
+    viewer_context = getattr(course, "_viewer_context", None)
+    if viewer_context:
+        payload.update(viewer_context)
+    return payload
 
 
 def serialize_course_detail(course: Course, request=None, spots_left: int = 0, viewer_context: dict | None = None) -> dict:
