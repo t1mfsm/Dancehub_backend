@@ -17,6 +17,7 @@ urlpatterns = [
     path('api/', include('apps.locations.urls')),
     path('api/', include('apps.courses.urls')),
     path('api/', include('apps.users.urls')),
+    path('api/', include('apps.notifications.urls')),
 ]
 
 if settings.DEBUG:

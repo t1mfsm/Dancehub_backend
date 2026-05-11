@@ -13,6 +13,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 
 from apps.courses.models import Attendance, Course, Enrollment, FavoriteCourse, Lesson
 from apps.courses.serializers import CourseDetailSerializer
+from apps.notifications.services import notify_enrollment_cancelled, notify_enrollment_success
 
 from .models import FavoriteTeacher, TeacherProfile, TeacherReview, UserPreference, UserSkill
 from .serializers import (
@@ -575,7 +576,10 @@ class CourseEnrollAPIView(APIView):
     authentication_classes = [JWTAuthentication, SessionAuthentication]
 
     def post(self, request, course_id: int):
-        course = generics.get_object_or_404(Course, id=course_id)
+        course = generics.get_object_or_404(
+            Course.objects.select_related("teacher__user", "studio"),
+            id=course_id,
+        )
         enrollment, created = Enrollment.objects.get_or_create(
             user=request.user,
             course=course,
@@ -585,10 +589,15 @@ class CourseEnrollAPIView(APIView):
                 "paid": False,
             },
         )
+        reactivated_from_cancelled = False
         if not created and enrollment.status == "cancelled":
             enrollment.status = "active"
             enrollment.cancelled_at = None
             enrollment.save(update_fields=["status", "cancelled_at", "updated_at"])
+            reactivated_from_cancelled = True
+
+        if created or reactivated_from_cancelled:
+            notify_enrollment_success(student=request.user, course=course)
 
         enrollment = _enrollment_queryset_with_course_detail().get(pk=enrollment.pk)
         data = CourseDetailSerializer(enrollment.course, context={"request": request}).data
@@ -598,13 +607,21 @@ class CourseEnrollAPIView(APIView):
         )
 
     def delete(self, request, course_id: int):
-        enrollment = Enrollment.objects.filter(user=request.user, course_id=course_id).first()
+        enrollment = (
+            Enrollment.objects.select_related("course", "course__studio")
+            .filter(user=request.user, course_id=course_id)
+            .first()
+        )
         if not enrollment:
             return Response({"detail": "Запись не найдена."}, status=status.HTTP_404_NOT_FOUND)
+
+        if enrollment.status == "cancelled":
+            return Response(status=status.HTTP_204_NO_CONTENT)
 
         enrollment.status = "cancelled"
         enrollment.cancelled_at = timezone.now()
         enrollment.save(update_fields=["status", "cancelled_at", "updated_at"])
+        notify_enrollment_cancelled(student=request.user, course=enrollment.course)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

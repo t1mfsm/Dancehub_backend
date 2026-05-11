@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     "apps.locations",
     "apps.users",
     "apps.courses",
+    "apps.notifications",
 ]
 
 MIDDLEWARE = [
@@ -96,6 +97,13 @@ TIME_ZONE = "Europe/Moscow"
 
 USE_I18N = True
 USE_TZ = True
+
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "dancehub-notifications",
+    }
+}
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
@@ -173,3 +181,9 @@ ENROLL_RANDOM_STUDENTS_ON_COURSE_CREATION = env_bool(
     "ENROLL_RANDOM_STUDENTS_ON_COURSE_CREATION",
     default=True,
 )
+
+EMAIL_BACKEND = config(
+    "EMAIL_BACKEND",
+    default="django.core.mail.backends.console.EmailBackend",
+)
+DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="DanceHub <noreply@dancehub.local>")

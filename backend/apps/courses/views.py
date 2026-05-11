@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
+from apps.notifications.services import maybe_send_lesson_reminders, notify_lesson_cancelled
 from apps.users.models import TeacherProfile
 
 from .constants import CourseLifecycleStatus
@@ -367,6 +368,10 @@ class CalendarAPIView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
     authentication_classes = [JWTAuthentication, SessionAuthentication]
 
+    def list(self, request, *args, **kwargs):
+        maybe_send_lesson_reminders()
+        return super().list(request, *args, **kwargs)
+
     def get_queryset(self):
         user = self.request.user
         mode = self.request.query_params.get("mode", "all")
@@ -378,6 +383,7 @@ class CalendarAPIView(generics.ListAPIView):
             "course__teacher__user",
             "course__dance_style",
             "course__studio__city",
+            "hall__studio__city",
         ).all()
 
         enrolled_ids = Enrollment.objects.filter(
@@ -426,7 +432,7 @@ class CourseLessonListAPIView(generics.ListCreateAPIView):
         queryset = Lesson.objects.select_related(
             "course__teacher__user",
             "course__studio__city",
-            "hall",
+            "hall__studio__city",
         ).filter(course_id=self.kwargs["id"])
 
         status_param = self.request.query_params.get("status")
@@ -474,7 +480,11 @@ class CourseLessonListAPIView(generics.ListCreateAPIView):
     ),
 )
 class LessonRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = Lesson.objects.select_related("course__teacher__user", "hall")
+    queryset = Lesson.objects.select_related(
+        "course__teacher__user",
+        "course__studio__city",
+        "hall__studio__city",
+    )
     lookup_field = "pk"
     lookup_url_kwarg = "lesson_id"
     permission_classes = [permissions.IsAuthenticated]
@@ -523,7 +533,11 @@ class LessonCancelAPIView(APIView):
 
     def post(self, request, lesson_id: int):
         lesson = get_object_or_404(
-            Lesson.objects.select_related("course__teacher__user", "hall"),
+            Lesson.objects.select_related(
+                "course__teacher__user",
+                "course__studio__city",
+                "hall__studio__city",
+            ),
             pk=lesson_id,
         )
         user = request.user
@@ -537,6 +551,7 @@ class LessonCancelAPIView(APIView):
 
         lesson.status = LessonStatus.CANCELLED
         lesson.save(update_fields=["status", "updated_at"])
+        notify_lesson_cancelled(lesson=lesson)
         return Response(LessonSerializer(lesson, context={"request": request}).data)
 
 

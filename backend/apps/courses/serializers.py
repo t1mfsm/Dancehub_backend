@@ -40,6 +40,26 @@ def _storage_url(path: str, request) -> str:
     return _build_absolute_url(url, request)
 
 
+def _lesson_studio_display(obj: Lesson) -> str:
+    """Название студии для занятия: зал курса или общая студия курса."""
+    if obj.hall_id and getattr(obj.hall, "studio_id", None):
+        return obj.hall.studio.name
+    if obj.course.studio_id:
+        return obj.course.studio.name
+    return ""
+
+
+def _lesson_city_display(obj: Lesson) -> str:
+    """Город студии для занятия: из зала или из общей студии курса."""
+    if obj.hall_id and getattr(obj.hall, "studio_id", None):
+        city = obj.hall.studio.city
+        return city.name if city else ""
+    if obj.course.studio_id:
+        city = getattr(obj.course.studio, "city", None)
+        return city.name if city else ""
+    return ""
+
+
 class DanceStyleSerializer(serializers.ModelSerializer):
     class Meta:
         model = DanceStyle
@@ -149,21 +169,39 @@ class CourseScheduleRuleSerializer(serializers.ModelSerializer):
         )
 
 
+def _studio_label(rule: CourseScheduleRule) -> tuple[int | None, str]:
+    if rule.hall_id and rule.hall:
+        studio = rule.hall.studio
+        return studio.id, studio.name
+    return None, ""
+
+
 def _format_schedule(course: Course, include_location: bool = False) -> list[dict]:
     """Формат расписания для списка и детальной карточки курса."""
-    rules = list(course.schedule_rules.order_by("time_from", "weekday"))
+    rules = list(
+        course.schedule_rules.select_related("hall", "hall__studio").order_by("time_from", "weekday")
+    )
     if not rules:
         return []
 
     grouped: dict[tuple, list[str]] = {}
+    studio_meta: dict[tuple, tuple[int | None, str]] = {}
+
     for r in rules:
-        key = (r.time_from.strftime("%H:%M"), r.time_to.strftime("%H:%M"), r.location_text or "")
+        time_from = r.time_from.strftime("%H:%M")
+        time_to = r.time_to.strftime("%H:%M")
+        location = r.location_text or ""
+        studio_id, studio_name = _studio_label(r)
+        sid_key = studio_id if studio_id is not None else -1
+        key = (time_from, time_to, location, sid_key)
         if key not in grouped:
             grouped[key] = []
+            studio_meta[key] = (studio_id, studio_name)
         grouped[key].append(r.weekday)
 
     result = []
-    for (time_from, time_to, location), weekdays in grouped.items():
+    for key, weekdays in grouped.items():
+        time_from, time_to, location, _sid_key = key
         sorted_ru = [
             WEEKDAY_TO_RU[w]
             for w in sorted(weekdays, key=lambda x: WEEKDAY_ORDER.index(x) if x in WEEKDAY_ORDER else 99)
@@ -175,6 +213,11 @@ def _format_schedule(course: Course, include_location: bool = False) -> list[dic
         }
         if include_location:
             item["location"] = location or None
+
+        sid_out, sname_out = studio_meta[key]
+        if sid_out is not None:
+            item["studio_id"] = sid_out
+            item["studio"] = sname_out
 
         result.append(item)
     return result
@@ -305,9 +348,9 @@ class LessonSerializer(serializers.ModelSerializer):
     course_id = serializers.IntegerField(source="course.id", read_only=True)
     course_name = serializers.CharField(source="course.name", read_only=True)
     teacher_name = serializers.SerializerMethodField()
-    hall = serializers.CharField(source="hall.name", read_only=True)
-    studio = serializers.CharField(source="course.studio.name", read_only=True)
-    city = serializers.CharField(source="course.studio.city.name", read_only=True)
+    hall = serializers.SerializerMethodField()
+    studio = serializers.SerializerMethodField()
+    city = serializers.SerializerMethodField()
 
     class Meta:
         model = Lesson
@@ -326,8 +369,17 @@ class LessonSerializer(serializers.ModelSerializer):
             "city",
         )
 
+    def get_hall(self, obj: Lesson) -> str:
+        return obj.hall.name if obj.hall_id else ""
+
     def get_teacher_name(self, obj: Lesson) -> str:
         return obj.course.teacher.user.get_full_name() or obj.course.teacher.user.email
+
+    def get_studio(self, obj: Lesson) -> str:
+        return _lesson_studio_display(obj)
+
+    def get_city(self, obj: Lesson) -> str:
+        return _lesson_city_display(obj)
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -340,8 +392,8 @@ class CalendarEventSerializer(serializers.ModelSerializer):
     course_name = serializers.CharField(source="course.name", read_only=True)
     teacher_name = serializers.SerializerMethodField()
     dance_style = serializers.CharField(source="course.dance_style.name", read_only=True)
-    studio = serializers.CharField(source="course.studio.name", read_only=True)
-    city = serializers.CharField(source="course.studio.city.name", read_only=True)
+    studio = serializers.SerializerMethodField()
+    city = serializers.SerializerMethodField()
     start = serializers.SerializerMethodField()
     end = serializers.SerializerMethodField()
 
@@ -366,6 +418,12 @@ class CalendarEventSerializer(serializers.ModelSerializer):
 
     def get_teacher_name(self, obj: Lesson) -> str:
         return obj.course.teacher.user.get_full_name() or obj.course.teacher.user.email
+
+    def get_studio(self, obj: Lesson) -> str:
+        return _lesson_studio_display(obj)
+
+    def get_city(self, obj: Lesson) -> str:
+        return _lesson_city_display(obj)
 
     def get_start(self, obj: Lesson) -> str:
         return f"{obj.lesson_date}T{obj.time_from}"
@@ -469,10 +527,20 @@ class CourseReviewSerializer(serializers.ModelSerializer):
         return obj.author_user.get_full_name() or obj.author_user.email
 
 
+def _location_label_from_studio(studio: Studio) -> str:
+    parts = [studio.name]
+    if studio.metro:
+        parts.append(f"м. {studio.metro}")
+    if studio.address:
+        parts.append(studio.address)
+    return ", ".join(parts)
+
+
 class CourseScheduleRuleWriteSerializer(serializers.Serializer):
     weekday = serializers.ChoiceField(choices=CourseScheduleRule._meta.get_field("weekday").choices)
     time_from = serializers.TimeField()
     time_to = serializers.TimeField()
+    studio_id = serializers.IntegerField(required=False, allow_null=True)
     hall_id = serializers.PrimaryKeyRelatedField(
         source="hall",
         queryset=Hall.objects.all(),
@@ -480,6 +548,36 @@ class CourseScheduleRuleWriteSerializer(serializers.Serializer):
         required=False,
     )
     location_text = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        sid = attrs.pop("studio_id", None)
+        hall = attrs.get("hall")
+        location_text = attrs.get("location_text") or ""
+
+        if sid is not None:
+            try:
+                studio = Studio.objects.get(pk=sid)
+            except Studio.DoesNotExist as exc:
+                raise serializers.ValidationError({"studio_id": "Студия не найдена."}) from exc
+            if hall is None:
+                hall_obj = Hall.objects.filter(studio_id=sid).order_by("name").first()
+                if hall_obj is None:
+                    raise serializers.ValidationError(
+                        {"studio_id": "У выбранной студии нет залов — укажите залы в админке."}
+                    )
+                attrs["hall"] = hall_obj
+            elif hall.studio_id != sid:
+                raise serializers.ValidationError({"hall_id": "Зал не принадлежит выбранной студии."})
+            if location_text.strip():
+                attrs["location_text"] = location_text.strip()
+            else:
+                attrs["location_text"] = _location_label_from_studio(studio)
+        elif hall is not None and not location_text.strip():
+            attrs["location_text"] = (
+                _location_label_from_studio(hall.studio) if hall.studio_id else ""
+            )
+
+        return attrs
 
 
 class CourseWriteSerializer(serializers.ModelSerializer):

@@ -105,6 +105,7 @@ docker compose up --build
 - MinIO API: `http://localhost:9000/`
 - MinIO Console: `http://localhost:9001/`
 
+
 Фото профиля загружается на endpoint `PATCH /api/user/` в поле `avatar_file`.
 Backend сохраняет файл через Django storage: при `USE_S3=True` файл попадает в MinIO bucket,
 а в поле пользователя `avatar` записывается URL сохраненного изображения.
