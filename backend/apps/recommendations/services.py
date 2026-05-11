@@ -232,7 +232,9 @@ def _course_matches_weekdays(course: Course, profile: UserRecommendationProfile)
 
 def _score_course_for_user(user: User, profile: UserRecommendationProfile, course: Course) -> tuple[float, dict, list[str]]:
     behavior_weight = float(profile.behavior_weight or 0)
-    content_weight = max(_profile_content_weight(profile), 1 - behavior_weight)
+    base_content_weight = _profile_content_weight(profile)
+    content_weight = max(0.25, base_content_weight * (1 - behavior_weight * 0.85))
+    behavior_multiplier = 0.75 + behavior_weight
 
     preferred_style_keys = {item.get("key") for item in (profile.preferred_styles_json or [])}
     behavior_style_map = _extract_weight_map(profile.behavior_styles_json)
@@ -257,7 +259,7 @@ def _score_course_for_user(user: User, profile: UserRecommendationProfile, cours
         factors["city"] = 10 * content_weight
         reasons.append("Курс в вашем городе")
     elif course.studio.city_id in city_map:
-        factors["behavior_city"] = min(city_map[course.studio.city_id], 6) * behavior_weight
+        factors["behavior_city"] = min(city_map[course.studio.city_id], 8) * behavior_multiplier
 
     if profile.price_from is not None and profile.price_to is not None and profile.price_from <= course.price <= profile.price_to:
         factors["price"] = 10 * content_weight
@@ -279,17 +281,17 @@ def _score_course_for_user(user: User, profile: UserRecommendationProfile, cours
         reasons.append("Подходит по времени")
 
     if style_slug in behavior_style_map:
-        factors["behavior_style"] = min(behavior_style_map[style_slug], 12) * behavior_weight
+        factors["behavior_style"] = min(behavior_style_map[style_slug], 20) * behavior_multiplier
         if "Совпадает с вашими любимыми стилями" not in reasons:
             reasons.append("Похож на курсы, которые вас уже интересовали")
 
     if course.teacher_id in teacher_map:
-        factors["teacher_interest"] = min(teacher_map[course.teacher_id], 12) * behavior_weight
+        factors["teacher_interest"] = min(teacher_map[course.teacher_id], 14) * behavior_multiplier
         if not any("преподавател" in reason.lower() for reason in reasons):
             reasons.append("У вас уже есть интерес к этому преподавателю")
 
     if course.studio_id in studio_map:
-        factors["studio_interest"] = min(studio_map[course.studio_id], 6) * behavior_weight
+        factors["studio_interest"] = min(studio_map[course.studio_id], 8) * behavior_multiplier
 
     popularity = getattr(course, "active_enrollments", 0) or 0
     if popularity > 0:
@@ -312,7 +314,7 @@ def build_recommendations_for_user(user: User, *, limit: int = 12) -> list[dict]
     spots_left_map = build_spots_left_map(candidates)
 
     excluded_course_ids = set(
-        Enrollment.objects.filter(user=user, status__in=[EnrollmentStatus.ACTIVE, EnrollmentStatus.PENDING]).values_list(
+        Enrollment.objects.filter(user=user, status=EnrollmentStatus.ACTIVE).values_list(
             "course_id", flat=True
         )
     )
@@ -364,6 +366,21 @@ def build_recommendations_for_user(user: User, *, limit: int = 12) -> list[dict]
             )
 
     return top_ranked
+
+
+def sort_courses_for_user(user: User, courses: list[Course]) -> list[Course]:
+    if not courses:
+        return []
+
+    profile = rebuild_user_recommendation_profile(user)
+
+    ranked: list[tuple[float, int, Course]] = []
+    for course in courses:
+        score, _, _ = _score_course_for_user(user, profile, course)
+        ranked.append((score, course.id, course))
+
+    ranked.sort(key=lambda item: (-item[0], -item[1]))
+    return [course for _, _, course in ranked]
 
 
 def serialize_recommendation_payload(user: User, request, *, limit: int = 12) -> list[dict]:

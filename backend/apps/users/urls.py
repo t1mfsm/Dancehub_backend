@@ -13,9 +13,6 @@ from .views import (
     NotificationDetailAPIView,
     NotificationListAPIView,
     NotificationReadAllAPIView,
-    PaymentOrderDetailAPIView,
-    PaymentOrderPayCardAPIView,
-    PaymentOrderPaySbpAPIView,
     RefreshTokenAPIView,
     RegisterAPIView,
     TeacherCourseListAPIView,
@@ -51,7 +48,4 @@ urlpatterns = [
     path("favorite-teachers/<int:teacher_id>/", FavoriteTeacherAddAPIView.as_view(), name="favorite-teacher-add"),
     path("enrollments/", EnrollmentListAPIView.as_view(), name="enrollment-list"),
     path("courses/<int:course_id>/enroll/", CourseEnrollAPIView.as_view(), name="course-enroll"),
-    path("payment-orders/<str:token>/", PaymentOrderDetailAPIView.as_view(), name="payment-order-detail"),
-    path("payment-orders/<str:token>/pay-card/", PaymentOrderPayCardAPIView.as_view(), name="payment-order-pay-card"),
-    path("payment-orders/<str:token>/pay-sbp/", PaymentOrderPaySbpAPIView.as_view(), name="payment-order-pay-sbp"),
 ]

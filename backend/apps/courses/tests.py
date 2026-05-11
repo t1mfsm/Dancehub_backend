@@ -46,11 +46,16 @@ class CourseListAPIViewTests(APITestCase):
             status=CourseStatus.PUBLISHED,
         )
 
-    def test_course_list_returns_only_published_and_calendar_active_by_default(self):
-        active_course = self._create_course(
-            name="Active course",
-            date_from_offset=-5,
-            date_to_offset=5,
+    def test_course_list_returns_only_catalog_visible_courses_by_default(self):
+        visible_course = self._create_course(
+            name="Visible course",
+            date_from_offset=3,
+            date_to_offset=20,
+        )
+        self._create_course(
+            name="Starts soon",
+            date_from_offset=0,
+            date_to_offset=20,
         )
         self._create_course(
             name="Completed course",
@@ -62,14 +67,14 @@ class CourseListAPIViewTests(APITestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]["id"], active_course.id)
-        self.assertEqual(response.data[0]["status"], "active")
+        self.assertEqual(response.data[0]["id"], visible_course.id)
+        self.assertEqual(response.data[0]["status"], "published")
 
     def test_course_list_can_filter_completed_courses_explicitly(self):
         self._create_course(
-            name="Active course",
-            date_from_offset=-5,
-            date_to_offset=5,
+            name="Visible course",
+            date_from_offset=3,
+            date_to_offset=20,
         )
         completed_course = self._create_course(
             name="Completed course",
@@ -83,6 +88,34 @@ class CourseListAPIViewTests(APITestCase):
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["id"], completed_course.id)
         self.assertEqual(response.data[0]["status"], "completed")
+
+    def test_course_list_hides_already_enrolled_course_for_authenticated_user(self):
+        visible_course = self._create_course(
+            name="Visible course",
+            date_from_offset=3,
+            date_to_offset=20,
+        )
+        hidden_course = self._create_course(
+            name="Already enrolled",
+            date_from_offset=4,
+            date_to_offset=20,
+        )
+        student = User.objects.create_user(
+            username="student_catalog",
+            email="student-catalog@example.com",
+            password="password123",
+            first_name="Иван",
+            last_name="Петров",
+            role=UserRole.STUDENT,
+        )
+        Enrollment.objects.create(course=hidden_course, user=student, status=EnrollmentStatus.ACTIVE)
+
+        self.client.force_authenticate(student)
+        response = self.client.get(reverse("courses:course-list"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["id"], visible_course.id)
 
 
 class CourseAttendanceStatsAPIViewTests(APITestCase):

@@ -5,6 +5,7 @@ from rest_framework import serializers
 from apps.common.choices import DanceLevel, UserRole, WeekdayCode
 from apps.common.files import persist_image_reference
 from apps.common.utils import absolutize_media_url, build_full_name
+from apps.courses.models import DanceStyle
 from apps.users.models import Notification, TeacherProfile, User
 
 
@@ -137,13 +138,29 @@ def normalize_pg_text_array(value) -> list[str]:
     return []
 
 
+def normalize_teacher_specializations(values: list[str] | None) -> list[str]:
+    raw_values = [str(value).strip() for value in (values or []) if str(value).strip()]
+    if not raw_values:
+        return []
+
+    slug_to_name = {
+        style.slug.strip().lower(): style.name
+        for style in DanceStyle.objects.all().only("slug", "name")
+    }
+
+    normalized: list[str] = []
+    for value in raw_values:
+        normalized.append(slug_to_name.get(value.lower(), value))
+    return normalized
+
+
 def serialize_teacher_profile_summary(teacher: TeacherProfile, request=None, rating: float = 0) -> dict:
     return {
         "bio": teacher.bio or "",
         "images": [absolutize_media_url(request, image) for image in (teacher.images or [])],
         "achievements": teacher.achievements or [],
         "experience": teacher.experience_years,
-        "specializations": teacher.specializations or [],
+        "specializations": normalize_teacher_specializations(teacher.specializations),
         "rating": round(float(rating or 0), 2),
     }
 

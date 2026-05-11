@@ -22,12 +22,8 @@ from apps.common.utils import (
     lesson_start_iso,
 )
 from apps.courses.models import AttendanceMark, Course, CourseSchedule, DanceStyle, Enrollment, Lesson, Studio
-from apps.courses.payment_utils import (
-    build_spots_left_map,
-    expire_stale_payment_orders_for_enrollment,
-    get_live_pending_payment_order,
-)
-from apps.recommendations.services import refresh_recommendations_for_user, track_course_view
+from apps.courses.payment_utils import build_spots_left_map
+from apps.recommendations.services import refresh_recommendations_for_user, sort_courses_for_user, track_course_view
 from apps.users.models import TeacherProfile, User
 from apps.users.notifications import (
     create_course_updated_notifications,
@@ -99,36 +95,35 @@ def build_course_viewer_context(course: Course, user: User | None) -> dict:
     if user is None or not getattr(user, "is_authenticated", False):
         return {
             "viewer_enrollment_status": None,
-            "viewer_paid": False,
-            "viewer_payment_order": None,
         }
 
     enrollment = Enrollment.objects.filter(user=user, course=course).first()
     if enrollment is None:
         return {
             "viewer_enrollment_status": None,
-            "viewer_paid": False,
-            "viewer_payment_order": None,
         }
-
-    expire_stale_payment_orders_for_enrollment(enrollment)
-    enrollment.refresh_from_db()
-    payment_order = get_live_pending_payment_order(enrollment)
-
-    if enrollment.status == EnrollmentStatus.CANCELLED and payment_order is None:
+    if enrollment.status == EnrollmentStatus.CANCELLED:
         return {
             "viewer_enrollment_status": None,
-            "viewer_paid": False,
-            "viewer_payment_order": None,
         }
-
-    from .serializers import serialize_payment_order
 
     return {
         "viewer_enrollment_status": enrollment.status,
-        "viewer_paid": enrollment.paid,
-        "viewer_payment_order": serialize_payment_order(payment_order) if payment_order is not None else None,
     }
+
+
+def is_course_visible_in_catalog(course: Course, *, spots_left: int, viewer_context: dict | None = None) -> bool:
+    first_lesson_at = first_lesson_start_at(course.lessons.all())
+    if not has_hours_before(first_lesson_at, hours=24):
+        return False
+    if spots_left <= 0:
+        return False
+    if viewer_context and viewer_context.get("viewer_enrollment_status") in (
+        EnrollmentStatus.ACTIVE,
+        EnrollmentStatus.PENDING,
+    ):
+        return False
+    return True
 
 
 class DanceStyleListAPIView(APIView):
@@ -314,6 +309,18 @@ class CourseListAPIView(APIView):
                 for course in courses
                 if course_lifecycle_status(course.status, course.date_from, course.date_to) == status_filter
             ]
+        else:
+            courses = [
+                course
+                for course in courses
+                if is_course_visible_in_catalog(
+                    course,
+                    spots_left=spots_left_map.get(course.id, course.capacity),
+                    viewer_context=getattr(course, "_viewer_context", None),
+                )
+            ]
+            if user is not None and getattr(user, "is_authenticated", False):
+                courses = sort_courses_for_user(user, courses)
         return Response(
             [
                 serialize_course_list_item(course, request=request, spots_left=spots_left_map.get(course.id, course.capacity))
@@ -529,7 +536,6 @@ class CourseStudentListAPIView(APIView):
                     "dance_level": enrollment.user.dance_level or "",
                     "enrolled_at": enrollment.enrolled_at.isoformat(),
                     "status": enrollment.status,
-                    "paid": enrollment.paid,
                 }
                 for enrollment in enrollments
             ]

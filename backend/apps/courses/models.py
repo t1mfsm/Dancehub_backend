@@ -8,8 +8,6 @@ from apps.common.choices import (
     DanceLevel,
     EnrollmentStatus,
     LessonStatus,
-    PaymentMethod,
-    PaymentOrderStatus,
     WeekdayCode,
 )
 
@@ -138,9 +136,8 @@ class Enrollment(models.Model):
     id = models.BigAutoField(primary_key=True)
     user = models.ForeignKey("users.User", on_delete=models.CASCADE, related_name="enrollments", db_column="user_id")
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="enrollments", db_column="course_id")
-    status = models.CharField(max_length=16, choices=EnrollmentStatus.choices, default=EnrollmentStatus.PENDING)
+    status = models.CharField(max_length=16, choices=EnrollmentStatus.choices, default=EnrollmentStatus.ACTIVE)
     enrolled_at = models.DateTimeField(default=timezone.now)
-    paid = models.BooleanField(default=False)
 
     class Meta:
         db_table = "enrollments"
@@ -148,33 +145,6 @@ class Enrollment(models.Model):
         unique_together = [("user", "course")]
         verbose_name = "Запись на курс"
         verbose_name_plural = "Записи на курсы"
-
-
-class PaymentOrder(models.Model):
-    id = models.BigAutoField(primary_key=True)
-    enrollment = models.ForeignKey(
-        Enrollment,
-        on_delete=models.CASCADE,
-        related_name="payment_orders",
-        db_column="enrollment_id",
-    )
-    order_number = models.TextField(unique=True)
-    public_token = models.TextField(unique=True)
-    amount = models.IntegerField()
-    receipt_email = models.TextField(null=True, blank=True)
-    payment_method = models.CharField(max_length=16, choices=PaymentMethod.choices, null=True, blank=True)
-    status = models.CharField(max_length=16, choices=PaymentOrderStatus.choices, default=PaymentOrderStatus.PENDING)
-    expires_at = models.DateTimeField()
-    paid_at = models.DateTimeField(null=True, blank=True)
-    created_at = models.DateTimeField(default=timezone.now)
-    updated_at = models.DateTimeField(default=timezone.now)
-
-    class Meta:
-        db_table = "payment_orders"
-        managed = False
-        ordering = ["-created_at", "-id"]
-        verbose_name = "Р—Р°РєР°Р· РЅР° РѕРїР»Р°С‚Сѓ"
-        verbose_name_plural = "Р—Р°РєР°Р·С‹ РЅР° РѕРїР»Р°С‚Сѓ"
 
 
 class AttendanceMark(models.Model):

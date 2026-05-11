@@ -71,7 +71,6 @@ class Command(BaseCommand):
                 defaults={
                     "enrolled_at": timezone.localdate(),
                     "status": EnrollmentStatus.ACTIVE,
-                    "paid": True,
                 },
             )
 
@@ -82,9 +81,6 @@ class Command(BaseCommand):
                 if enrollment.status != EnrollmentStatus.ACTIVE:
                     enrollment.status = EnrollmentStatus.ACTIVE
                     update_fields.append("status")
-                if not enrollment.paid:
-                    enrollment.paid = True
-                    update_fields.append("paid")
                 if update_fields:
                     enrollment.save(update_fields=update_fields)
 

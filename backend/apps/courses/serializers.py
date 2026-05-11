@@ -8,7 +8,6 @@ from apps.common.choices import (
     AttendanceStatus,
     CourseStatus,
     DanceLevel,
-    EnrollmentStatus,
     LessonStatus,
     WeekdayCode,
 )
@@ -21,9 +20,8 @@ from apps.common.utils import (
     has_hours_before,
     lesson_lifecycle_status,
     lesson_start_at,
-    lesson_start_iso,
 )
-from apps.courses.models import Course, Lesson, PaymentOrder
+from apps.courses.models import Course, Lesson
 
 
 def serialize_schedule_row(row) -> dict:
@@ -196,65 +194,6 @@ class CourseWriteSerializer(serializers.Serializer):
 
 class EnrollmentRequestSerializer(serializers.Serializer):
     pass
-
-
-def serialize_payment_order(order: PaymentOrder) -> dict:
-    return {
-        "id": order.id,
-        "order_number": order.order_number,
-        "token": order.public_token,
-        "amount": order.amount,
-        "status": order.status,
-        "expires_at": order.expires_at.isoformat(),
-        "paid_at": order.paid_at.isoformat() if order.paid_at else None,
-        "receipt_email": order.receipt_email or "",
-        "payment_method": order.payment_method or "",
-        "course_id": order.enrollment.course_id,
-        "course_name": order.enrollment.course.name,
-    }
-
-
-class PaymentCardPaySerializer(serializers.Serializer):
-    receipt_email = serializers.EmailField()
-    card_number = serializers.CharField()
-    cardholder_name = serializers.CharField()
-    expiry = serializers.CharField()
-    cvv = serializers.CharField()
-
-    def validate_card_number(self, value: str) -> str:
-        digits = "".join(ch for ch in value if ch.isdigit())
-        if len(digits) < 16 or len(digits) > 19:
-            raise serializers.ValidationError("Card number must contain 16 to 19 digits.")
-        return digits
-
-    def validate_cardholder_name(self, value: str) -> str:
-        normalized = " ".join(value.split())
-        if len(normalized) < 2:
-            raise serializers.ValidationError("Cardholder name is required.")
-        return normalized
-
-    def validate_expiry(self, value: str) -> str:
-        normalized = value.strip()
-        if len(normalized) != 5 or normalized[2] != "/":
-            raise serializers.ValidationError("Use MM/YY format.")
-        month = normalized[:2]
-        year = normalized[3:]
-        if not (month.isdigit() and year.isdigit()):
-            raise serializers.ValidationError("Use MM/YY format.")
-        month_value = int(month)
-        if month_value < 1 or month_value > 12:
-            raise serializers.ValidationError("Month must be between 01 and 12.")
-        return normalized
-
-    def validate_cvv(self, value: str) -> str:
-        digits = "".join(ch for ch in value if ch.isdigit())
-        if len(digits) not in {3, 4}:
-            raise serializers.ValidationError("CVV must contain 3 or 4 digits.")
-        return digits
-
-
-class PaymentSbpPaySerializer(serializers.Serializer):
-    receipt_email = serializers.EmailField()
 
 
 class LessonUpdateSerializer(serializers.Serializer):

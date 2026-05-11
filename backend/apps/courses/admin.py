@@ -45,8 +45,8 @@ class LessonAdmin(admin.ModelAdmin):
 
 @admin.register(Enrollment)
 class EnrollmentAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "course", "status", "paid", "enrolled_at")
-    list_filter = ("status", "paid")
+    list_display = ("id", "user", "course", "status", "enrolled_at")
+    list_filter = ("status",)
     search_fields = ("user__email", "course__name")
     ordering = ("-enrolled_at",)
 

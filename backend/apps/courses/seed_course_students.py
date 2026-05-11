@@ -186,7 +186,6 @@ def enroll_random_demo_students(course: Course) -> int:
                 defaults={
                     "enrolled_at": course.date_from,
                     "status": EnrollmentStatus.ACTIVE,
-                    "paid": True,
                 },
             )
 
@@ -195,9 +194,6 @@ def enroll_random_demo_students(course: Course) -> int:
                 if enrollment.status != EnrollmentStatus.ACTIVE:
                     enrollment.status = EnrollmentStatus.ACTIVE
                     update_fields.append("status")
-                if not enrollment.paid:
-                    enrollment.paid = True
-                    update_fields.append("paid")
                 if update_fields:
                     enrollment.save(update_fields=update_fields)
 

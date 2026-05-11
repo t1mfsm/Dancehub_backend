@@ -41,18 +41,6 @@ class EnrollmentStatus(models.TextChoices):
     PENDING = "pending", "Pending"
 
 
-class PaymentMethod(models.TextChoices):
-    CARD = "card", "Card"
-    SBP = "sbp", "SBP"
-
-
-class PaymentOrderStatus(models.TextChoices):
-    PENDING = "pending", "Pending"
-    PAID = "paid", "Paid"
-    EXPIRED = "expired", "Expired"
-    CANCELLED = "cancelled", "Cancelled"
-
-
 class AttendanceStatus(models.TextChoices):
     PRESENT = "present", "Present"
     ABSENT = "absent", "Absent"
