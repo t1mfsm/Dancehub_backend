@@ -136,11 +136,14 @@ class TeacherReview(models.Model):
         related_name="reviews",
         db_column="teacher_id",
     )
+    course = models.ForeignKey("courses.Course", on_delete=models.CASCADE, related_name="teacher_reviews", db_column="course_id")
     lesson = models.ForeignKey(
         "courses.Lesson",
         on_delete=models.CASCADE,
         related_name="teacher_reviews",
         db_column="lesson_id",
+        null=True,
+        blank=True,
     )
     rating = models.PositiveSmallIntegerField()
     text = models.TextField()
@@ -149,7 +152,7 @@ class TeacherReview(models.Model):
     class Meta:
         db_table = "teacher_reviews"
         managed = False
-        unique_together = [("user", "lesson")]
+        unique_together = [("user", "course")]
         verbose_name = "Отзыв о преподавателе"
         verbose_name_plural = "Отзывы о преподавателях"
 

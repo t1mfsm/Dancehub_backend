@@ -18,6 +18,7 @@ from apps.courses.serializers import (
     EnrollmentRequestSerializer,
     serialize_course_detail,
 )
+from apps.courses.views import build_review_context
 from apps.recommendations.services import refresh_recommendations_for_user
 from apps.users.models import Notification, TeacherProfile, User
 from config.authentication import build_tokens_for_user, decode_token
@@ -359,7 +360,7 @@ class TeacherRetrieveAPIView(APIView):
         teacher = TeacherProfile.objects.select_related("user__city").filter(id=id).first()
         if teacher is None:
             raise ValidationError({"detail": "Teacher not found."})
-        reviews = teacher.reviews.select_related("user").order_by("-created_at")
+        reviews = teacher.reviews.select_related("user", "course").order_by("-created_at")
         courses = teacher.courses.select_related("dance_style", "studio__city").prefetch_related("schedule_rows").annotate(
             active_enrollments=Count("enrollments", filter=Q(enrollments__status=EnrollmentStatus.ACTIVE))
         )
@@ -383,6 +384,7 @@ class TeacherRetrieveAPIView(APIView):
                 {
                     "id": review.id,
                     "author_name": build_full_name(review.user.first_name, review.user.last_name) or review.user.email,
+                    "course_name": review.course.name,
                     "rating": review.rating,
                     "text": review.text,
                     "created_at": review.created_at.isoformat(),
@@ -568,7 +570,15 @@ class EnrollmentListAPIView(APIView):
         spots_left_map = build_spots_left_map(courses)
         return Response(
             [
-                serialize_course_detail(course, request=request, spots_left=spots_left_map.get(course.id, course.capacity))
+                serialize_course_detail(
+                    course,
+                    request=request,
+                    spots_left=spots_left_map.get(course.id, course.capacity),
+                    viewer_context={
+                        **_build_course_viewer_context(course, user),
+                        **build_review_context(course, user),
+                    },
+                )
                 for course in courses
             ]
         )

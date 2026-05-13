@@ -117,6 +117,43 @@ class CourseListAPIViewTests(APITestCase):
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["id"], visible_course.id)
 
+    def test_course_list_hides_courses_owned_by_current_teacher(self):
+        self._create_course(
+            name="Own course",
+            date_from_offset=4,
+            date_to_offset=20,
+        )
+        second_teacher_user = User.objects.create_user(
+            username="teacher_two",
+            email="teacher-two@example.com",
+            password="password123",
+            first_name="Мария",
+            last_name="Соколова",
+            role=UserRole.TEACHER,
+        )
+        second_teacher = TeacherProfile.objects.create(user=second_teacher_user)
+        today = timezone.localdate()
+        visible_course = Course.objects.create(
+            teacher=second_teacher,
+            dance_style=self.style,
+            studio=self.studio,
+            name="Visible from another teacher",
+            description="Описание",
+            level=DanceLevel.BEGINNER,
+            price="5000.00",
+            capacity=10,
+            date_from=today + timedelta(days=5),
+            date_to=today + timedelta(days=20),
+            status=CourseStatus.PUBLISHED,
+        )
+
+        self.client.force_authenticate(self.teacher_user)
+        response = self.client.get(reverse("courses:course-list"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["id"], visible_course.id)
+
 
 class CourseAttendanceStatsAPIViewTests(APITestCase):
     def setUp(self):

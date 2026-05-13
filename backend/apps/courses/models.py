@@ -94,6 +94,12 @@ class Course(models.Model):
 class CourseSchedule(models.Model):
     id = models.BigAutoField(primary_key=True)
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="schedule_rows", db_column="course_id")
+    studio = models.ForeignKey(
+        Studio,
+        on_delete=models.RESTRICT,
+        related_name="schedule_rows",
+        db_column="studio_id",
+    )
     weekday = models.CharField(max_length=3, choices=WeekdayCode.choices)
     time_from = models.TimeField()
     time_to = models.TimeField()
@@ -109,6 +115,12 @@ class CourseSchedule(models.Model):
 class Lesson(models.Model):
     id = models.BigAutoField(primary_key=True)
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="lessons", db_column="course_id")
+    studio = models.ForeignKey(
+        Studio,
+        on_delete=models.RESTRICT,
+        related_name="lessons",
+        db_column="studio_id",
+    )
     schedule = models.ForeignKey(
         CourseSchedule,
         on_delete=models.SET_NULL,

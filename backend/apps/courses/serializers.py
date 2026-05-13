@@ -24,12 +24,17 @@ from apps.common.utils import (
 from apps.courses.models import Course, Lesson
 
 
-def serialize_schedule_row(row) -> dict:
+def serialize_schedule_row(row, course: Course | None = None) -> dict:
+    studio = getattr(row, "studio", None)
+    studio_name = studio.name if studio is not None else (course.studio.name if course is not None else None)
+    studio_id = getattr(row, "studio_id", None) or (course.studio_id if course is not None else None)
     return {
         "weekday": row.weekday,
         "time_from": row.time_from.isoformat(timespec="minutes"),
         "time_to": row.time_to.isoformat(timespec="minutes"),
         "location": row.location_text or "",
+        "studio": studio_name,
+        "studio_id": studio_id,
     }
 
 
@@ -54,12 +59,16 @@ def serialize_course_list_item(course: Course, request=None, spots_left: int = 0
         "dance_style": course.dance_style.name,
         "city": course.studio.city.name,
         "studio": course.studio.name,
-        "schedule": [serialize_schedule_row(row) for row in course.schedule_rows.all().order_by("weekday", "time_from")],
+        "schedule": [
+            serialize_schedule_row(row, course=course)
+            for row in course.schedule_rows.all().order_by("weekday", "time_from")
+        ],
         "spots_left": max(spots_left, 0),
         "can_enroll": has_hours_before(first_lesson_at, hours=24),
         "can_cancel_enrollment": has_hours_before(first_lesson_at, hours=24),
         "can_edit": has_hours_before(first_lesson_at, hours=48),
         "first_lesson_at": first_lesson_at.isoformat() if first_lesson_at else None,
+        "can_leave_review": False,
     }
     viewer_context = getattr(course, "_viewer_context", None)
     if viewer_context:
@@ -91,7 +100,10 @@ def serialize_course_detail(course: Course, request=None, spots_left: int = 0, v
         "dance_style": course.dance_style.name,
         "city": course.studio.city.name,
         "studio": course.studio.name,
-        "schedule": [serialize_schedule_row(row) for row in course.schedule_rows.all().order_by("weekday", "time_from")],
+        "schedule": [
+            serialize_schedule_row(row, course=course)
+            for row in course.schedule_rows.all().order_by("weekday", "time_from")
+        ],
         "music": {
             "artist": course.music_artist or "",
             "track": course.music_track or "",
@@ -116,7 +128,9 @@ def serialize_lesson(lesson: Lesson) -> dict:
         "time_from": lesson.time_from.isoformat(timespec="minutes"),
         "time_to": lesson.time_to.isoformat(timespec="minutes"),
         "location_text": lesson.location_text,
-        "status": lesson_lifecycle_status(lesson.status, lesson.lesson_date),
+        "studio": lesson.studio.name if lesson.studio_id else lesson.course.studio.name,
+        "studio_id": lesson.studio_id or lesson.course.studio_id,
+        "status": lesson_lifecycle_status(lesson.status, lesson.lesson_date, lesson.time_to),
         "hall": lesson.hall,
         "start_at": starts_at.isoformat(),
         "can_mark_attendance": timezone.now() >= starts_at,
@@ -127,6 +141,7 @@ class ScheduleEntrySerializer(serializers.Serializer):
     weekday = serializers.ChoiceField(choices=WeekdayCode.choices)
     time_from = serializers.TimeField()
     time_to = serializers.TimeField()
+    studio_id = serializers.IntegerField(required=False, allow_null=True)
     location_text = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
     def validate(self, attrs):
@@ -137,7 +152,7 @@ class ScheduleEntrySerializer(serializers.Serializer):
 
 class CourseWriteSerializer(serializers.Serializer):
     dance_style_id = serializers.IntegerField()
-    studio_id = serializers.IntegerField()
+    studio_id = serializers.IntegerField(required=False, allow_null=True)
     name = serializers.CharField()
     description = serializers.CharField(required=False, allow_blank=True, default="")
     music_artist = serializers.CharField(required=False, allow_blank=True, default="")
@@ -155,14 +170,32 @@ class CourseWriteSerializer(serializers.Serializer):
     image_files = serializers.ListField(child=serializers.ImageField(), required=False)
 
     def to_internal_value(self, data):
-        raw = data.copy()
+        if hasattr(data, "lists"):
+            raw = {}
+            for key, values in data.lists():
+                raw[key] = values if len(values) > 1 else values[0]
+        else:
+            raw = dict(data)
         schedule = raw.get("schedule")
         if isinstance(schedule, str):
             raw["schedule"] = json.loads(schedule)
+        elif (
+            isinstance(schedule, list)
+            and len(schedule) == 1
+            and isinstance(schedule[0], str)
+        ):
+            raw["schedule"] = json.loads(schedule[0])
         return super().to_internal_value(raw)
 
     def validate_schedule(self, value):
-        serializer = ScheduleEntrySerializer(data=value, many=True)
+        normalized_rows: list[dict] = []
+        for row in value:
+            if isinstance(row, list):
+                normalized_rows.extend(row)
+            else:
+                normalized_rows.append(row)
+
+        serializer = ScheduleEntrySerializer(data=normalized_rows, many=True)
         serializer.is_valid(raise_exception=True)
         validated_rows = serializer.validated_data
         unique_rows: list[dict] = []
@@ -186,6 +219,20 @@ class CourseWriteSerializer(serializers.Serializer):
         date_to = attrs.get("date_to")
         if date_from is not None and date_to is not None and date_from > date_to:
             raise serializers.ValidationError({"date_to": ["Must not be earlier than date_from."]})
+
+        if attrs.get("studio_id") is None:
+            schedule_rows = attrs.get("schedule") or []
+            inferred_studio_id = next(
+                (row.get("studio_id") for row in schedule_rows if row.get("studio_id") is not None),
+                None,
+            )
+            if inferred_studio_id is not None:
+                attrs["studio_id"] = inferred_studio_id
+
+        if not self.partial and attrs.get("studio_id") is None:
+            raise serializers.ValidationError(
+                {"studio_id": ["Choose a studio or specify it in at least one schedule row."]}
+            )
         return attrs
 
     def normalized_image_urls(self, folder: str) -> list[str]:
@@ -237,6 +284,7 @@ def expand_lessons_for_schedule(date_from, date_to, schedule_rows: list[dict]) -
                         "lesson_date": current,
                         "time_from": row["time_from"],
                         "time_to": row["time_to"],
+                        "studio_id": row.get("studio_id"),
                         "location_text": row.get("location_text") or "",
                     }
                 )

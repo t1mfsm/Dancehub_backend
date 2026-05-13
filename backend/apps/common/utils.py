@@ -33,11 +33,17 @@ def course_lifecycle_status(course_status: str, date_from: date, date_to: date) 
     return CourseStatus.ACTIVE
 
 
-def lesson_lifecycle_status(lesson_status: str, lesson_date: date) -> str:
-    today = date.today()
+def lesson_lifecycle_status(lesson_status: str, lesson_date: date, lesson_time_to: time | None = None) -> str:
     if lesson_status == LessonStatus.CANCELLED:
         return LessonStatus.CANCELLED
-    if lesson_date < today:
+
+    if lesson_time_to is None:
+        if lesson_date < timezone.localdate():
+            return "completed"
+        return LessonStatus.SCHEDULED
+
+    lesson_end = lesson_start_at(lesson_date, lesson_time_to)
+    if timezone.now() >= lesson_end:
         return "completed"
     return LessonStatus.SCHEDULED
 

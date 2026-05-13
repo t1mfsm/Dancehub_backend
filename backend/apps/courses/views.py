@@ -9,7 +9,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.common.choices import AttendanceStatus, EnrollmentStatus, LessonStatus
+from apps.common.choices import AttendanceStatus, CourseStatus, EnrollmentStatus, LessonStatus
 from apps.common.files import save_uploaded_file
 from apps.common.utils import (
     absolutize_media_url,
@@ -24,12 +24,13 @@ from apps.common.utils import (
 from apps.courses.models import AttendanceMark, Course, CourseSchedule, DanceStyle, Enrollment, Lesson, Studio
 from apps.courses.payment_utils import build_spots_left_map
 from apps.recommendations.services import refresh_recommendations_for_user, sort_courses_for_user, track_course_view
-from apps.users.models import TeacherProfile, User
+from apps.users.models import TeacherProfile, TeacherReview, User
 from apps.users.notifications import (
     create_course_updated_notifications,
     create_favorite_teacher_new_course_notifications,
     create_lesson_changed_notifications,
 )
+from .seed_course_students import auto_enroll_minimum_course_students
 
 from .serializers import (
     AttendanceMarkRequestSerializer,
@@ -68,7 +69,7 @@ def get_course_or_404(course_id: int) -> Course:
     course = (
         Course.objects.filter(id=course_id)
         .select_related("teacher__user", "dance_style", "studio__city")
-        .prefetch_related("schedule_rows", "lessons")
+        .prefetch_related("schedule_rows__studio", "lessons__studio")
         .annotate(active_enrollments=Count("enrollments", filter=Q(enrollments__status=EnrollmentStatus.ACTIVE)))
         .first()
     )
@@ -95,20 +96,30 @@ def build_course_viewer_context(course: Course, user: User | None) -> dict:
     if user is None or not getattr(user, "is_authenticated", False):
         return {
             "viewer_enrollment_status": None,
+            "is_own_course": False,
+        }
+
+    if course.teacher.user_id == user.id:
+        return {
+            "viewer_enrollment_status": None,
+            "is_own_course": True,
         }
 
     enrollment = Enrollment.objects.filter(user=user, course=course).first()
     if enrollment is None:
         return {
             "viewer_enrollment_status": None,
+            "is_own_course": False,
         }
     if enrollment.status == EnrollmentStatus.CANCELLED:
         return {
             "viewer_enrollment_status": None,
+            "is_own_course": False,
         }
 
     return {
         "viewer_enrollment_status": enrollment.status,
+        "is_own_course": False,
     }
 
 
@@ -123,7 +134,42 @@ def is_course_visible_in_catalog(course: Course, *, spots_left: int, viewer_cont
         EnrollmentStatus.PENDING,
     ):
         return False
+    if viewer_context and viewer_context.get("is_own_course"):
+        return False
     return True
+
+
+def build_review_context(course: Course, user: User | None) -> dict:
+    if user is None or not getattr(user, "is_authenticated", False):
+        return {
+            "can_leave_review": False,
+        }
+
+    if course.teacher.user_id == user.id:
+        return {
+            "can_leave_review": False,
+        }
+
+    if course_lifecycle_status(course.status, course.date_from, course.date_to) != CourseStatus.COMPLETED:
+        return {
+            "can_leave_review": False,
+        }
+
+    eligible_attendance_exists = AttendanceMark.objects.filter(
+        lesson__course=course,
+        lesson__course__teacher=course.teacher,
+        student=user,
+        status=AttendanceStatus.PRESENT,
+    ).exists()
+    if not eligible_attendance_exists:
+        return {
+            "can_leave_review": False,
+        }
+
+    has_review = TeacherReview.objects.filter(user=user, course=course).exists()
+    return {
+        "can_leave_review": not has_review,
+    }
 
 
 class DanceStyleListAPIView(APIView):
@@ -247,6 +293,7 @@ class CalendarAPIView(APIView):
         lessons = lessons.distinct().order_by("lesson_date", "time_from")
         payload = []
         for lesson in lessons:
+            lesson_studio = lesson.studio if lesson.studio_id else lesson.course.studio
             payload.append(
                 {
                     "id": lesson.id,
@@ -266,9 +313,9 @@ class CalendarAPIView(APIView):
                     "start": lesson_start_iso(lesson.lesson_date, lesson.time_from),
                     "end": lesson_start_iso(lesson.lesson_date, lesson.time_to),
                     "location_text": lesson.location_text,
-                    "status": lesson_lifecycle_status(lesson.status, lesson.lesson_date),
-                    "studio": lesson.course.studio.name,
-                    "city": lesson.course.studio.city.name,
+                    "status": lesson_lifecycle_status(lesson.status, lesson.lesson_date, lesson.time_to),
+                    "studio": lesson_studio.name,
+                    "city": lesson_studio.city.name,
                 }
             )
         return Response(payload)
@@ -278,7 +325,7 @@ class CourseListAPIView(APIView):
     def get(self, request):
         courses = (
             Course.objects.select_related("teacher__user", "dance_style", "studio__city")
-            .prefetch_related("schedule_rows")
+            .prefetch_related("schedule_rows__studio")
             .annotate(active_enrollments=Count("enrollments", filter=Q(enrollments__status=EnrollmentStatus.ACTIVE)))
         )
         if city := request.query_params.get("city"):
@@ -362,9 +409,11 @@ class CourseListAPIView(APIView):
             course.save(update_fields=["images", "image_cover"])
             created_schedule = []
             for row in data["schedule"]:
+                row_studio_id = row.get("studio_id") or course.studio_id
                 created_schedule.append(
                     CourseSchedule.objects.create(
                         course=course,
+                        studio_id=row_studio_id,
                         weekday=row["weekday"],
                         time_from=row["time_from"],
                         time_to=row["time_to"],
@@ -372,10 +421,23 @@ class CourseListAPIView(APIView):
                     )
                 )
             for schedule_row in created_schedule:
-                lessons = expand_lessons_for_schedule(course.date_from, course.date_to, [row for row in data["schedule"] if row["weekday"] == schedule_row.weekday and row["time_from"] == schedule_row.time_from and row["time_to"] == schedule_row.time_to and (row.get("location_text") or "") == (schedule_row.location_text or "")])
+                lessons = expand_lessons_for_schedule(
+                    course.date_from,
+                    course.date_to,
+                    [
+                        {
+                            "weekday": schedule_row.weekday,
+                            "time_from": schedule_row.time_from,
+                            "time_to": schedule_row.time_to,
+                            "studio_id": schedule_row.studio_id,
+                            "location_text": schedule_row.location_text or "",
+                        }
+                    ],
+                )
                 for lesson_data in lessons:
                     Lesson.objects.create(
                         course=course,
+                        studio_id=lesson_data.get("studio_id") or course.studio_id,
                         schedule=schedule_row,
                         lesson_date=lesson_data["lesson_date"],
                         time_from=lesson_data["time_from"],
@@ -383,6 +445,7 @@ class CourseListAPIView(APIView):
                         location_text=lesson_data["location_text"],
                         status=LessonStatus.SCHEDULED,
                     )
+            auto_enroll_minimum_course_students(course, exclude_user_ids={teacher.user_id})
         course = get_course_or_404(course.id)
         spots_left = build_spots_left_map([course]).get(course.id, course.capacity)
         create_favorite_teacher_new_course_notifications(course=course)
@@ -398,6 +461,7 @@ class CourseRetrieveAPIView(APIView):
                 refresh_recommendations_for_user(user)
         spots_left = build_spots_left_map([course]).get(course.id, course.capacity)
         viewer_context = build_course_viewer_context(course, user)
+        viewer_context.update(build_review_context(course, user))
         return Response(
             serialize_course_detail(
                 course,
@@ -471,6 +535,7 @@ class CourseRetrieveAPIView(APIView):
                             "weekday": row.weekday,
                             "time_from": row.time_from,
                             "time_to": row.time_to,
+                            "studio_id": row.studio_id,
                             "location_text": row.location_text or "",
                         }
                         for row in course.schedule_rows.all()
@@ -480,6 +545,7 @@ class CourseRetrieveAPIView(APIView):
                 created_schedule = [
                     CourseSchedule.objects.create(
                         course=course,
+                        studio_id=row.get("studio_id") or course.studio_id,
                         weekday=row["weekday"],
                         time_from=row["time_from"],
                         time_to=row["time_to"],
@@ -488,10 +554,23 @@ class CourseRetrieveAPIView(APIView):
                     for row in schedule_rows
                 ]
                 for schedule_row in created_schedule:
-                    lessons = expand_lessons_for_schedule(course.date_from, course.date_to, [row for row in schedule_rows if row["weekday"] == schedule_row.weekday and row["time_from"] == schedule_row.time_from and row["time_to"] == schedule_row.time_to and (row.get("location_text") or "") == (schedule_row.location_text or "")])
+                    lessons = expand_lessons_for_schedule(
+                        course.date_from,
+                        course.date_to,
+                        [
+                            {
+                                "weekday": schedule_row.weekday,
+                                "time_from": schedule_row.time_from,
+                                "time_to": schedule_row.time_to,
+                                "studio_id": schedule_row.studio_id,
+                                "location_text": schedule_row.location_text or "",
+                            }
+                        ],
+                    )
                     for lesson_data in lessons:
                         Lesson.objects.create(
                             course=course,
+                            studio_id=lesson_data.get("studio_id") or course.studio_id,
                             schedule=schedule_row,
                             lesson_date=lesson_data["lesson_date"],
                             time_from=lesson_data["time_from"],
@@ -513,6 +592,59 @@ class CourseRetrieveAPIView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class CourseReviewCreateAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        request={
+            "application/json": {
+                "type": "object",
+                "properties": {
+                    "rating": {"type": "integer"},
+                    "text": {"type": "string"},
+                },
+                "required": ["rating", "text"],
+            }
+        }
+    )
+    def post(self, request, id: int):
+        user = require_authenticated_user(request)
+        course = get_course_or_404(id)
+        review_context = build_review_context(course, user)
+        if not review_context["can_leave_review"]:
+            raise ValidationError({"detail": "Review cannot be left for this course."})
+
+        rating = request.data.get("rating")
+        text = str(request.data.get("text") or "").strip()
+
+        try:
+            rating_value = int(rating)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError({"rating": "Rating must be an integer from 1 to 5."}) from exc
+
+        if rating_value < 1 or rating_value > 5:
+            raise ValidationError({"rating": "Rating must be between 1 and 5."})
+        if not text:
+            raise ValidationError({"text": "Review text is required."})
+
+        review = TeacherReview.objects.create(
+            user=user,
+            teacher=course.teacher,
+            course=course,
+            rating=rating_value,
+            text=text,
+        )
+        return Response(
+            {
+                "id": review.id,
+                "rating": review.rating,
+                "text": review.text,
+                "created_at": review.created_at.isoformat(),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
 class CourseStudentListAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -521,7 +653,10 @@ class CourseStudentListAPIView(APIView):
         course = get_course_or_404(id)
         ensure_teacher_owns_course(teacher, course)
         enrollments = (
-            Enrollment.objects.filter(course=course, status=EnrollmentStatus.ACTIVE)
+            Enrollment.objects.filter(
+                course=course,
+                status__in=(EnrollmentStatus.ACTIVE, EnrollmentStatus.COMPLETED),
+            )
             .select_related("user")
             .order_by("-enrolled_at")
         )
@@ -632,8 +767,6 @@ class AttendanceMarkAPIView(APIView):
             student_id=serializer.validated_data["student_id"],
             defaults={"status": serializer.validated_data["status"], "marked_at": timezone.now()},
         )
-        if mark.status == AttendanceStatus.PRESENT:
-            refresh_recommendations_for_user(mark.student)
         return Response(
             {
                 "id": mark.id,

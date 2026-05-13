@@ -250,11 +250,11 @@ class RegisterSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         if attrs["password"] != attrs["password_confirm"]:
-            raise serializers.ValidationError({"password_confirm": ["Passwords do not match."]})
+            raise serializers.ValidationError({"password_confirm": ["Пароли не совпадают."]})
         if User.objects.filter(email=attrs["email"]).exists():
-            raise serializers.ValidationError({"email": ["A user with this email already exists."]})
+            raise serializers.ValidationError({"email": ["Пользователь с таким email уже существует."]})
         if User.objects.filter(username=attrs["username"]).exists():
-            raise serializers.ValidationError({"username": ["A user with this username already exists."]})
+            raise serializers.ValidationError({"username": ["Пользователь с таким username уже существует."]})
         return attrs
 
     def create(self, validated_data):
@@ -313,11 +313,11 @@ class UserPreferencesSerializer(serializers.Serializer):
         time_from = attrs.get("preferred_time_from")
         time_to = attrs.get("preferred_time_to")
         if time_from and time_to and time_from >= time_to:
-            raise serializers.ValidationError({"preferred_time_to": ["Must be later than preferred_time_from."]})
+            raise serializers.ValidationError({"preferred_time_to": ["Время окончания должно быть позже времени начала."]})
         price_from = attrs.get("price_from")
         price_to = attrs.get("price_to")
         if price_from is not None and price_to is not None and price_from > price_to:
-            raise serializers.ValidationError({"price_to": ["Must be greater than or equal to price_from."]})
+            raise serializers.ValidationError({"price_to": ["Максимальная цена должна быть больше или равна минимальной."]})
         return attrs
 
 

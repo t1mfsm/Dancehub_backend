@@ -1,5 +1,6 @@
 """Демозапись 10–20 учеников на новый курс: пул пользователей с русскими ФИО и аватарами seed/teachers (MinIO)."""
 
+import math
 import random
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from django.contrib.auth.hashers import make_password
 from django.core.files import File
 from django.core.files.storage import default_storage
 from django.db import transaction
+from django.utils import timezone
 
 from apps.courses.models import Course, Enrollment, EnrollmentStatus
 from apps.users.models import DanceLevel, User, UserRole
@@ -184,7 +186,7 @@ def enroll_random_demo_students(course: Course) -> int:
                 user=student,
                 course=course,
                 defaults={
-                    "enrolled_at": course.date_from,
+                    "enrolled_at": timezone.now(),
                     "status": EnrollmentStatus.ACTIVE,
                 },
             )
@@ -200,3 +202,71 @@ def enroll_random_demo_students(course: Course) -> int:
             enrolled += 1
 
     return enrolled
+
+
+def auto_enroll_minimum_course_students(
+    course: Course,
+    *,
+    exclude_user_ids: set[int] | None = None,
+    min_fill_ratio: float = 0.5,
+) -> int:
+    if course.capacity <= 0:
+        return 0
+
+    exclude_ids = set(exclude_user_ids or set())
+    target = max(1, math.ceil(course.capacity * min_fill_ratio))
+
+    existing_enrollments = {
+        enrollment.user_id: enrollment
+        for enrollment in Enrollment.objects.filter(course=course)
+    }
+
+    candidate_users = list(
+        User.objects.exclude(id__in=exclude_ids)
+        .exclude(id__in=list(existing_enrollments.keys()))
+        .order_by("id")
+    )
+    random.shuffle(candidate_users)
+
+    selected_users = candidate_users[:target]
+
+    if len(selected_users) < target:
+        needed = target - len(selected_users)
+        used_user_ids = {user.id for user in selected_users} | exclude_ids | set(existing_enrollments.keys())
+        seed_indices = list(range(POOL_SIZE))
+        random.shuffle(seed_indices)
+
+        for pool_index in seed_indices:
+            if needed <= 0:
+                break
+
+            student = _ensure_demo_student(pool_index)
+            if student.id in used_user_ids:
+                continue
+
+            selected_users.append(student)
+            used_user_ids.add(student.id)
+            needed -= 1
+
+    with transaction.atomic():
+        created_or_reactivated = 0
+
+        for user in selected_users:
+            enrollment = existing_enrollments.get(user.id)
+
+            if enrollment is None:
+                Enrollment.objects.create(
+                    user=user,
+                    course=course,
+                    status=EnrollmentStatus.ACTIVE,
+                    enrolled_at=timezone.now(),
+                )
+                created_or_reactivated += 1
+                continue
+
+            if enrollment.status != EnrollmentStatus.ACTIVE:
+                enrollment.status = EnrollmentStatus.ACTIVE
+                enrollment.save(update_fields=["status"])
+                created_or_reactivated += 1
+
+    return created_or_reactivated

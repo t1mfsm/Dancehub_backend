@@ -31,7 +31,7 @@ class TeacherProfileAdmin(admin.ModelAdmin):
 
 @admin.register(TeacherReview)
 class TeacherReviewAdmin(admin.ModelAdmin):
-    list_display = ("id", "teacher", "user", "lesson", "rating", "created_at")
+    list_display = ("id", "teacher", "user", "course", "rating", "created_at")
     list_filter = ("rating", "created_at")
     search_fields = ("teacher__user__email", "user__email", "text")
     ordering = ("-created_at",)
