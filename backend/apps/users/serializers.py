@@ -179,7 +179,7 @@ def serialize_user(user: User, request=None, teacher: TeacherProfile | None = No
         favorite_course_ids = [row[0] for row in cursor.fetchall()]
         cursor.execute(
             """
-            SELECT ft.teacher_id, u.first_name, u.middle_name, u.last_name, u.email
+            SELECT ft.teacher_id, u.first_name, u.middle_name, u.last_name, u.email, u.avatar
             FROM favorite_teachers ft
             JOIN teachers t ON t.id = ft.teacher_id
             JOIN users u ON u.id = t.user_id
@@ -210,6 +210,10 @@ def serialize_user(user: User, request=None, teacher: TeacherProfile | None = No
         "favorite_teacher_ids": [row[0] for row in favorite_teacher_rows],
         "favorite_teacher_names": [
             build_full_name(row[3], row[1], row[2]) or row[4]
+            for row in favorite_teacher_rows
+        ],
+        "favorite_teacher_avatars": [
+            absolutize_media_url(request, row[5]) or None
             for row in favorite_teacher_rows
         ],
         "preferred_time_from": user.preferred_time_from.isoformat() if user.preferred_time_from else None,

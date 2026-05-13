@@ -21,7 +21,7 @@ from apps.common.utils import (
     lesson_lifecycle_status,
     lesson_start_at,
 )
-from apps.courses.models import Course, Lesson
+from apps.courses.models import COURSE_LEVEL_CHOICES, Course, Lesson
 
 
 def serialize_schedule_row(row, course: Course | None = None) -> dict:
@@ -158,7 +158,7 @@ class CourseWriteSerializer(serializers.Serializer):
     music_artist = serializers.CharField(required=False, allow_blank=True, default="")
     music_track = serializers.CharField(required=False, allow_blank=True, default="")
     music_url = serializers.CharField(required=False, allow_blank=True, default="")
-    level = serializers.ChoiceField(choices=DanceLevel.choices)
+    level = serializers.ChoiceField(choices=COURSE_LEVEL_CHOICES)
     price = serializers.IntegerField(min_value=0)
     capacity = serializers.IntegerField(min_value=1)
     date_from = serializers.DateField()

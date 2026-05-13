@@ -124,6 +124,9 @@ def build_course_viewer_context(course: Course, user: User | None) -> dict:
 
 
 def is_course_visible_in_catalog(course: Course, *, spots_left: int, viewer_context: dict | None = None) -> bool:
+    lifecycle_status = course_lifecycle_status(course.status, course.date_from, course.date_to)
+    if lifecycle_status in (CourseStatus.COMPLETED, CourseStatus.CANCELLED):
+        return False
     first_lesson_at = first_lesson_start_at(course.lessons.all())
     if not has_hours_before(first_lesson_at, hours=24):
         return False
@@ -256,7 +259,7 @@ class MapPointListAPIView(APIView):
                     "metro": studio.metro or "",
                     "lat": studio.lat,
                     "lng": studio.lng,
-                    "image": studio.image or "",
+                    "image": absolutize_media_url(request, studio.image) or "",
                     "halls_count": studio.halls_count,
                     "active_courses_count": studio.active_courses_count,
                     "dance_styles": style_names,

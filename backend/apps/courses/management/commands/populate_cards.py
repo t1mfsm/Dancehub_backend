@@ -226,7 +226,7 @@ class Command(BaseCommand):
             city = card["city"]
             studio = studios_map[(card["studio"], city)]
             dance_style = dance_styles[card["type"]]
-            level = LEVEL_MAP.get(card["level"], DanceLevel.ANY)
+            level = LEVEL_MAP.get(card["level"], "any")
 
             image_urls = [
                 self._store_seed_asset(COURSE_IMAGES_MAP[img_key])

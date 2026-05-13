@@ -89,6 +89,27 @@ class CourseListAPIViewTests(APITestCase):
         self.assertEqual(response.data[0]["id"], completed_course.id)
         self.assertEqual(response.data[0]["status"], "completed")
 
+    def test_course_list_hides_manually_completed_course_by_default(self):
+        today = timezone.localdate()
+        Course.objects.create(
+            teacher=self.teacher,
+            dance_style=self.style,
+            studio=self.studio,
+            name="Manually completed course",
+            description="Описание",
+            level=DanceLevel.BEGINNER,
+            price="5000.00",
+            capacity=10,
+            date_from=today + timedelta(days=3),
+            date_to=today + timedelta(days=20),
+            status=CourseStatus.COMPLETED,
+        )
+
+        response = self.client.get(reverse("courses:course-list"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, [])
+
     def test_course_list_hides_already_enrolled_course_for_authenticated_user(self):
         visible_course = self._create_course(
             name="Visible course",
@@ -153,6 +174,38 @@ class CourseListAPIViewTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["id"], visible_course.id)
+
+    def test_teacher_can_create_course_with_any_level(self):
+        self.client.force_authenticate(self.teacher_user)
+        today = timezone.localdate()
+
+        response = self.client.post(
+            reverse("courses:course-list"),
+            {
+                "dance_style_id": self.style.id,
+                "studio_id": self.studio.id,
+                "name": "Any level course",
+                "description": "Описание",
+                "level": "any",
+                "price": 5000,
+                "capacity": 10,
+                "date_from": (today + timedelta(days=5)).isoformat(),
+                "date_to": (today + timedelta(days=12)).isoformat(),
+                "schedule": [
+                    {
+                        "weekday": "mon",
+                        "time_from": "18:00",
+                        "time_to": "19:30",
+                        "studio_id": self.studio.id,
+                        "location_text": "Hall A",
+                    }
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["level"], "any")
 
 
 class CourseAttendanceStatsAPIViewTests(APITestCase):

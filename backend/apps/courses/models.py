@@ -11,6 +11,8 @@ from apps.common.choices import (
     WeekdayCode,
 )
 
+COURSE_LEVEL_CHOICES = [("any", "Any"), *DanceLevel.choices]
+
 
 class DanceStyle(models.Model):
     id = models.BigAutoField(primary_key=True)
@@ -74,7 +76,7 @@ class Course(models.Model):
     music_artist = models.TextField(default="", blank=True)
     music_track = models.TextField(default="", blank=True)
     music_url = models.TextField(default="", blank=True)
-    level = models.CharField(max_length=16, choices=DanceLevel.choices)
+    level = models.CharField(max_length=16, choices=COURSE_LEVEL_CHOICES)
     price = models.IntegerField()
     capacity = models.PositiveIntegerField()
     date_from = models.DateField()
