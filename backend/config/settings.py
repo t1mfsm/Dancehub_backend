@@ -96,6 +96,8 @@ if not FRONTEND_ASSETS_ROOT.exists():
     FRONTEND_ASSETS_ROOT = BASE_DIR.parent.parent / "f2e-front" / "src" / "assets"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+DATA_UPLOAD_MAX_MEMORY_SIZE = config("DATA_UPLOAD_MAX_MEMORY_SIZE", default=25 * 1024 * 1024, cast=int)
+FILE_UPLOAD_MAX_MEMORY_SIZE = config("FILE_UPLOAD_MAX_MEMORY_SIZE", default=25 * 1024 * 1024, cast=int)
 EMAIL_BACKEND = config("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
 EMAIL_HOST = config("EMAIL_HOST", default="smtp.yandex.ru")
 EMAIL_PORT = config("EMAIL_PORT", default=587, cast=int)
