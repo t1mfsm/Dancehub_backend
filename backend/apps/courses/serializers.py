@@ -173,7 +173,10 @@ class CourseWriteSerializer(serializers.Serializer):
         if hasattr(data, "lists"):
             raw = {}
             for key, values in data.lists():
-                raw[key] = values if len(values) > 1 else values[0]
+                if key in {"image_files", "ordered_image_urls"}:
+                    raw[key] = values
+                else:
+                    raw[key] = values if len(values) > 1 else values[0]
         else:
             raw = dict(data)
         schedule = raw.get("schedule")
