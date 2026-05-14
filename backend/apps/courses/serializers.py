@@ -83,6 +83,12 @@ def serialize_course_detail(course: Course, request=None, spots_left: int = 0, v
         course.teacher.user.middle_name,
     ) or course.teacher.user.email
     first_lesson_at = first_lesson_start_at(course.lessons.all())
+    images = [absolutize_media_url(request, image) for image in (course.images or [])]
+    cover = absolutize_media_url(request, course.image_cover)
+
+    if not images and cover:
+        images = [cover]
+
     payload = {
         "id": course.id,
         "name": course.name,
@@ -94,7 +100,7 @@ def serialize_course_detail(course: Course, request=None, spots_left: int = 0, v
         "date_from": course.date_from.isoformat(),
         "date_to": course.date_to.isoformat(),
         "status": course_lifecycle_status(course.status, course.date_from, course.date_to),
-        "images": [absolutize_media_url(request, image) for image in (course.images or [])],
+        "images": images,
         "teacher_id": course.teacher_id,
         "teacher_name": teacher_name,
         "dance_style": course.dance_style.name,
