@@ -5,7 +5,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.db import transaction
-from django.db.models import Avg, Count, Q
+from django.db.models import Count, Q
 from django.utils import timezone
 
 from apps.common.choices import CourseStatus, EnrollmentStatus, WeekdayCode
@@ -14,10 +14,12 @@ from apps.courses.models import AttendanceMark, Course, DanceStyle, Enrollment
 from apps.courses.payment_utils import build_spots_left_map
 from apps.courses.serializers import serialize_course_list_item
 from apps.recommendations.models import CourseView, UserCourseRecommendation, UserRecommendationProfile
-from apps.users.models import TeacherProfile, TeacherReview, User
+from apps.users.models import TeacherReview, User
 
 VIEW_DEDUP_WINDOW = timedelta(minutes=30)
 MAX_BEHAVIOR_WEIGHT = Decimal("0.6500")
+CITY_PREFERENCE_BONUS = 24
+CITY_MISMATCH_PENALTY = 18
 
 
 def _normalize_style_token(value: str | None) -> str:
@@ -255,9 +257,12 @@ def _score_course_for_user(user: User, profile: UserRecommendationProfile, cours
         factors["level"] = 15 * content_weight
         reasons.append("Подходит по вашему уровню")
 
-    if profile.city_id and course.studio.city_id == profile.city_id:
-        factors["city"] = 10 * content_weight
-        reasons.append("Курс в вашем городе")
+    if profile.city_id:
+        if course.studio.city_id == profile.city_id:
+            factors["city"] = CITY_PREFERENCE_BONUS * content_weight
+            reasons.append("Курс проходит в выбранном вами городе")
+        else:
+            factors["city_mismatch"] = -CITY_MISMATCH_PENALTY * content_weight
     elif course.studio.city_id in city_map:
         factors["behavior_city"] = min(city_map[course.studio.city_id], 8) * behavior_multiplier
 
@@ -267,10 +272,10 @@ def _score_course_for_user(user: User, profile: UserRecommendationProfile, cours
 
     elif profile.price_from is not None and profile.price_to is None and course.price >= profile.price_from:
         factors["price"] = 8 * content_weight
-        reasons.append("РЎРѕРѕС‚РІРµС‚СЃС‚РІСѓРµС‚ РІР°С€РµРјСѓ Р±СЋРґР¶РµС‚Сѓ")
+        reasons.append("Соответствует вашему бюджету")
     elif profile.price_from is None and profile.price_to is not None and course.price <= profile.price_to:
         factors["price"] = 8 * content_weight
-        reasons.append("РЎРѕРѕС‚РІРµС‚СЃС‚РІСѓРµС‚ РІР°С€РµРјСѓ Р±СЋРґР¶РµС‚Сѓ")
+        reasons.append("Соответствует вашему бюджету")
 
     if _course_matches_weekdays(course, profile):
         factors["weekday"] = 5 * content_weight
@@ -297,7 +302,7 @@ def _score_course_for_user(user: User, profile: UserRecommendationProfile, cours
     if popularity > 0:
         factors["popularity"] = min(popularity, 10) * 0.35
         if not reasons:
-            reasons.append("РџРѕРїСѓР»СЏСЂРЅС‹Р№ РєСѓСЂСЃ СЃСЂРµРґРё СѓС‡РµРЅРёРєРѕРІ")
+            reasons.append("Популярный курс среди учеников")
 
     score = round(sum(factors.values()), 4)
     return score, factors, reasons[:3]
