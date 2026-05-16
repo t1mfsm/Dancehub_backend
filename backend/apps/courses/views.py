@@ -479,12 +479,18 @@ class CourseRetrieveAPIView(APIView):
         teacher = get_owned_teacher(request)
         course = get_course_or_404(id)
         ensure_teacher_owns_course(teacher, course)
-        first_lesson_at = first_lesson_start_at(course.lessons.all())
-        if not has_hours_before(first_lesson_at, hours=48):
-            raise ValidationError({"detail": "Course editing closes 48 hours before the first lesson."})
         serializer = CourseWriteSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
+        first_lesson_at = first_lesson_start_at(course.lessons.all())
+        is_status_only_cancel = set(data.keys()) == {"status"} and data.get("status") == CourseStatus.CANCELLED
+        can_cancel_before_start = first_lesson_at is None or timezone.now() < first_lesson_at
+
+        if is_status_only_cancel and not can_cancel_before_start:
+            raise ValidationError({"detail": "Course cancellation is allowed only before the first lesson starts."})
+
+        if not is_status_only_cancel and not has_hours_before(first_lesson_at, hours=48):
+            raise ValidationError({"detail": "Course editing closes 48 hours before the first lesson."})
         regenerate_schedule = any(field in data for field in ["date_from", "date_to", "schedule"])
         should_notify_students = regenerate_schedule or any(
             field in data
@@ -530,6 +536,17 @@ class CourseRetrieveAPIView(APIView):
                 course.image_cover = course.images[0]
             course.save()
             if regenerate_schedule:
+                cancelled_lessons = {
+                    (
+                        lesson.lesson_date,
+                        lesson.time_from,
+                        lesson.time_to,
+                        lesson.location_text or "",
+                        lesson.studio_id or course.studio_id,
+                    )
+                    for lesson in course.lessons.all()
+                    if lesson.status == LessonStatus.CANCELLED
+                }
                 if "schedule" in data:
                     schedule_rows = data["schedule"]
                 else:
@@ -579,7 +596,18 @@ class CourseRetrieveAPIView(APIView):
                             time_from=lesson_data["time_from"],
                             time_to=lesson_data["time_to"],
                             location_text=lesson_data["location_text"],
-                            status=LessonStatus.SCHEDULED,
+                            status=(
+                                LessonStatus.CANCELLED
+                                if (
+                                    lesson_data["lesson_date"],
+                                    lesson_data["time_from"],
+                                    lesson_data["time_to"],
+                                    lesson_data["location_text"],
+                                    lesson_data.get("studio_id") or course.studio_id,
+                                )
+                                in cancelled_lessons
+                                else LessonStatus.SCHEDULED
+                            ),
                         )
         course = get_course_or_404(course.id)
         spots_left = build_spots_left_map([course]).get(course.id, course.capacity)
